@@ -1,0 +1,12 @@
+# Secrets - never commit your API key
+.env
+
+# Generated data - re-downloaded/rebuilt on each deploy, no need to commit
+data/
+
+# Python virtual environment - specific to your machine, not needed in git
+venv/
+
+# Python cache files
+__pycache__/
+*.pyc
