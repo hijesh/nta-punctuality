@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Live Departures</title>
+<link rel="manifest" href="/manifest.json" />
+<meta name="theme-color" content="#005a9c" />
+<link rel="icon" href="/icons/icon-192.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e14;
+    --panel: #11161f;
+    --panel-edge: #1c2430;
+    --amber: #ffb020;
+    --green: #3ddc84;
+    --red: #ff5c5c;
+    --text-dim: #6b7686;
+    --text: #e7ebf0;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, sans-serif;
+    min-height: 100vh;
+    padding-bottom: 3rem;
+  }
+
+  header {
+    padding: 1.75rem 1.25rem 1rem;
+    border-bottom: 1px solid var(--panel-edge);
+  }
+
+  header .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin: 0 0 0.35rem;
+  }
+
+  header h1 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+  }
+
+  .search-wrap {
+    max-width: 640px;
+    margin: 1.25rem auto 0;
+    padding: 0 1.25rem;
+    position: relative;
+  }
+
+  #stopSearch {
+    width: 100%;
+    padding: 0.85rem 1rem;
+    font-size: 1rem;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 10px;
+    color: var(--text);
+    font-family: inherit;
+  }
+
+  #stopSearch:focus {
+    outline: none;
+    border-color: var(--amber);
+  }
+
+  #searchResults {
+    position: absolute;
+    left: 1.25rem;
+    right: 1.25rem;
+    top: calc(100% + 4px);
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 10px;
+    overflow: hidden;
+    z-index: 10;
+    max-height: 260px;
+    overflow-y: auto;
+  }
+
+  .search-result {
+    padding: 0.7rem 1rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--panel-edge);
+    font-size: 0.92rem;
+  }
+  .search-result:last-child { border-bottom: none; }
+  .search-result:hover { background: #1a212c; }
+  .search-result .sid {
+    color: var(--text-dim);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    margin-left: 0.5rem;
+  }
+
+  main {
+    max-width: 640px;
+    margin: 1.5rem auto;
+    padding: 0 1.25rem;
+  }
+
+  #boardHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.75rem;
+    gap: 0.75rem;
+  }
+
+  #boardHeader .title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+
+  #boardHeader h2 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  #favouriteToggle {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.25rem;
+    line-height: 1;
+    padding: 0;
+    color: var(--text-dim);
+    flex-shrink: 0;
+  }
+  #favouriteToggle.active { color: var(--amber); }
+
+  #favouritesRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0 0 1.1rem;
+  }
+
+  .fav-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 999px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+  .fav-chip:hover { border-color: var(--amber); }
+  .fav-chip.active-chip { border-color: var(--amber); color: var(--amber); }
+
+  #lastUpdated {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+
+  .board {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .row {
+    display: grid;
+    grid-template-columns: 3.6rem 1fr auto;
+    gap: 0.85rem;
+    align-items: center;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid var(--panel-edge);
+  }
+  .row:last-child { border-bottom: none; }
+
+  .row .route {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 1rem;
+    background: #1a212c;
+    border-radius: 6px;
+    padding: 0.3rem 0;
+    text-align: center;
+  }
+
+  .row .headsign {
+    font-size: 0.95rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .row .sched {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    display: block;
+    margin-top: 0.15rem;
+  }
+
+  .row .due {
+    text-align: right;
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .row .due .mins {
+    font-size: 1.3rem;
+    font-weight: 700;
+  }
+  .row .due .status {
+    display: block;
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-top: 0.1rem;
+  }
+
+  .on-time { color: var(--green); }
+  .late { color: var(--amber); }
+  .very-late { color: var(--red); }
+  .no-data { color: var(--text-dim); }
+
+  #emptyState, #loadingState {
+    padding: 2.5rem 1rem;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.95rem;
+  }
+
+  #installBtn {
+    display: none;
+    margin: 1.25rem auto 0;
+    padding: 0.6rem 1.1rem;
+    background: var(--amber);
+    color: #16110a;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">Ireland &middot; Live &middot; GTFS-Realtime</p>
+  <h1>Departures</h1>
+  <div class="search-wrap">
+    <input id="stopSearch" type="text" placeholder="Search for a stop, e.g. Letterbreen" autocomplete="off" />
+    <div id="searchResults" class="hidden"></div>
+  </div>
+</header>
+
+<main>
+  <div id="favouritesRow"></div>
+
+  <div id="boardHeader" class="hidden">
+    <div class="title-row">
+      <button id="favouriteToggle" title="Save this stop">&#9734;</button>
+      <h2 id="stopNameLabel"></h2>
+    </div>
+    <span id="lastUpdated"></span>
+  </div>
+
+  <div id="loadingState" class="hidden">Loading departures...</div>
+  <div id="emptyState" class="hidden">Search for a stop above to see live departures.</div>
+
+  <div id="board" class="board hidden"></div>
+
+  <button id="installBtn">Install app on this device</button>
+</main>
+
+<script>
+  const searchInput = document.getElementById('stopSearch');
+  const searchResults = document.getElementById('searchResults');
+  const board = document.getElementById('board');
+  const boardHeader = document.getElementById('boardHeader');
+  const stopNameLabel = document.getElementById('stopNameLabel');
+  const lastUpdated = document.getElementById('lastUpdated');
+  const loadingState = document.getElementById('loadingState');
+  const emptyState = document.getElementById('emptyState');
+  const favouritesRow = document.getElementById('favouritesRow');
+  const favouriteToggle = document.getElementById('favouriteToggle');
+
+  let currentStopId = localStorage.getItem('lastStopId');
+  let currentStopName = localStorage.getItem('lastStopName');
+  let refreshTimer = null;
+  let searchDebounce = null;
+
+  // --- Favourites (saved stops) -----------------------------------------
+  function getFavourites() {
+    try {
+      return JSON.parse(localStorage.getItem('favouriteStops') || '[]');
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveFavourites(favs) {
+    localStorage.setItem('favouriteStops', JSON.stringify(favs));
+  }
+
+  function isFavourite(stopId) {
+    return getFavourites().some(f => f.stop_id === stopId);
+  }
+
+  function toggleCurrentFavourite() {
+    if (!currentStopId) return;
+    let favs = getFavourites();
+
+    if (isFavourite(currentStopId)) {
+      favs = favs.filter(f => f.stop_id !== currentStopId);
+    } else {
+      favs.push({ stop_id: currentStopId, stop_name: currentStopName });
+    }
+
+    saveFavourites(favs);
+    updateFavouriteToggle();
+    renderFavourites();
+  }
+
+  function updateFavouriteToggle() {
+    if (!currentStopId) return;
+    const active = isFavourite(currentStopId);
+    favouriteToggle.classList.toggle('active', active);
+    favouriteToggle.innerHTML = active ? '&#9733;' : '&#9734;'; // filled vs outline star
+    favouriteToggle.title = active ? 'Remove from saved stops' : 'Save this stop';
+  }
+
+  function renderFavourites() {
+    const favs = getFavourites();
+
+    if (favs.length === 0) {
+      favouritesRow.innerHTML = '';
+      return;
+    }
+
+    favouritesRow.innerHTML = favs.map(f => {
+      const active = f.stop_id === currentStopId;
+      return `<div class="fav-chip ${active ? 'active-chip' : ''}" data-id="${f.stop_id}" data-name="${escapeHtml(f.stop_name)}">
+                &#9733; ${escapeHtml(f.stop_name)}
+              </div>`;
+    }).join('');
+
+    favouritesRow.querySelectorAll('.fav-chip').forEach(chip => {
+      chip.addEventListener('click', () => selectStop(chip.dataset.id, chip.dataset.name));
+    });
+  }
+
+  favouriteToggle.addEventListener('click', toggleCurrentFavourite);
+
+  emptyState.classList.remove('hidden');
+
+  // --- Search ---------------------------------------------------------
+  searchInput.addEventListener('input', () => {
+    clearTimeout(searchDebounce);
+    const q = searchInput.value.trim();
+    if (q.length < 2) {
+      searchResults.classList.add('hidden');
+      return;
+    }
+    searchDebounce = setTimeout(() => runSearch(q), 300);
+  });
+
+  async function runSearch(q) {
+    try {
+      const res = await fetch(`/api/stops?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      renderSearchResults(data.results || []);
+    } catch (e) {
+      searchResults.innerHTML = '<div class="search-result">Search failed - is the server running?</div>';
+      searchResults.classList.remove('hidden');
+    }
+  }
+
+  function renderSearchResults(results) {
+    if (results.length === 0) {
+      searchResults.innerHTML = '<div class="search-result">No stops found.</div>';
+      searchResults.classList.remove('hidden');
+      return;
+    }
+    searchResults.innerHTML = results.map(r =>
+      `<div class="search-result" data-id="${r.stop_id}" data-name="${r.stop_name}">
+         ${r.stop_name} <span class="sid">${r.stop_id}</span>
+       </div>`
+    ).join('');
+    searchResults.classList.remove('hidden');
+
+    searchResults.querySelectorAll('.search-result').forEach(el => {
+      el.addEventListener('click', () => {
+        selectStop(el.dataset.id, el.dataset.name);
+      });
+    });
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.search-wrap')) {
+      searchResults.classList.add('hidden');
+    }
+  });
+
+  // --- Selecting a stop -------------------------------------------------
+  function selectStop(stopId, stopName) {
+    currentStopId = stopId;
+    currentStopName = stopName;
+    localStorage.setItem('lastStopId', stopId);
+    localStorage.setItem('lastStopName', stopName);
+
+    searchInput.value = '';
+    searchResults.classList.add('hidden');
+    emptyState.classList.add('hidden');
+    boardHeader.classList.remove('hidden');
+    stopNameLabel.textContent = stopName;
+
+    updateFavouriteToggle();
+    renderFavourites();
+
+    loadBoard();
+    if (refreshTimer) clearInterval(refreshTimer);
+    refreshTimer = setInterval(loadBoard, 30000); // refresh every 30s
+  }
+
+  async function loadBoard() {
+    if (!currentStopId) return;
+    loadingState.classList.remove('hidden');
+
+    try {
+      const res = await fetch(`/api/departures/${currentStopId}`);
+      const data = await res.json();
+      renderBoard(data);
+    } catch (e) {
+      board.innerHTML = '<div id="emptyState">Could not reach the server. Is app.py still running?</div>';
+      board.classList.remove('hidden');
+    } finally {
+      loadingState.classList.add('hidden');
+    }
+  }
+
+  function renderBoard(data) {
+    const upcoming = data.upcoming || [];
+
+    if (upcoming.length === 0) {
+      board.innerHTML = '<div id="emptyState">No departures in the next 90 minutes.</div>';
+      board.classList.remove('hidden');
+    } else {
+      board.innerHTML = upcoming.map(rowHtml).join('');
+      board.classList.remove('hidden');
+    }
+
+    const now = new Date();
+    lastUpdated.textContent = `Updated ${now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+  }
+
+  function rowHtml(dep) {
+    let statusClass = 'no-data';
+    let statusLabel = 'Scheduled';
+
+    if (dep.has_live_data) {
+      const d = dep.delay_minutes;
+      if (Math.abs(d) < 1) {
+        statusClass = 'on-time'; statusLabel = 'On time';
+      } else if (d > 0 && d <= 5) {
+        statusClass = 'late'; statusLabel = `${d} min late`;
+      } else if (d > 5) {
+        statusClass = 'very-late'; statusLabel = `${d} min late`;
+      } else {
+        statusClass = 'on-time'; statusLabel = `${Math.abs(d)} min early`;
+      }
+    }
+
+    return `
+      <div class="row">
+        <div class="route">${escapeHtml(dep.route)}</div>
+        <div>
+          <div class="headsign">${escapeHtml(dep.headsign || '')}</div>
+          <span class="sched">Sched ${dep.scheduled_time}</span>
+        </div>
+        <div class="due">
+          <span class="mins ${statusClass}">${dep.due_in_minutes}'</span>
+          <span class="status ${statusClass}">${statusLabel}</span>
+        </div>
+      </div>`;
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // --- Restore last-viewed stop on load ---------------------------------
+  renderFavourites();
+  if (currentStopId && currentStopName) {
+    selectStop(currentStopId, currentStopName);
+  }
+
+  // --- PWA install prompt -------------------------------------------------
+  let deferredInstallPrompt = null;
+  const installBtn = document.getElementById('installBtn');
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    installBtn.style.display = 'block';
+  });
+
+  installBtn.addEventListener('click', async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    await deferredInstallPrompt.userChoice;
+    deferredInstallPrompt = null;
+    installBtn.style.display = 'none';
+  });
+
+  // --- Register service worker (required for installability) -----------
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {
+      console.log('Service worker registration failed - app still works, just not installable yet.');
+    });
+  }
+</script>
+
+</body>
+</html>
