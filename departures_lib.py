@@ -66,9 +66,32 @@ def search_stops(conn, search_term: str, limit: int = 20):
         (f"%{search_term}%", limit),
     ).fetchall()
     return [
-        {"stop_id": r[0], "stop_name": r[1], "lat": r[2], "lon": r[3]}
+        {
+            "stop_id": r[0], "stop_name": r[1], "lat": r[2], "lon": r[3],
+            "direction": get_stop_direction(conn, r[0]),
+        }
         for r in rows
     ]
+
+
+def get_stop_direction(conn, stop_id: str):
+    """Returns the most common destination (trip_headsign) served by this
+    stop_id - e.g. 'Sligo'. Two stop_ids at the same physical location
+    (opposite sides of the road) usually serve opposite directions, so
+    this is what actually distinguishes them for a rider, not the ID."""
+    row = conn.execute(
+        """
+        SELECT t.trip_headsign, COUNT(*) AS n
+        FROM stop_times st
+        JOIN trips t ON t.trip_id = st.trip_id
+        WHERE st.stop_id = ? AND t.trip_headsign IS NOT NULL AND t.trip_headsign != ''
+        GROUP BY t.trip_headsign
+        ORDER BY n DESC
+        LIMIT 1
+        """,
+        (stop_id,),
+    ).fetchone()
+    return row[0] if row else None
 
 
 def gtfs_time_to_seconds(time_str: str) -> int:

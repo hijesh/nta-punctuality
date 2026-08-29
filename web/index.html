@@ -104,6 +104,17 @@
     font-size: 0.72rem;
     margin-left: 0.5rem;
   }
+  .search-result .result-direction {
+    color: var(--amber);
+    font-size: 0.78rem;
+    margin-left: 0.5rem;
+  }
+
+  #stopNameLabel .stop-direction {
+    color: var(--amber);
+    font-size: 0.85rem;
+    font-weight: 500;
+  }
 
   main {
     max-width: 640px;
@@ -168,6 +179,42 @@
   .fav-chip:hover { border-color: var(--amber); }
   .fav-chip.active-chip { border-color: var(--amber); color: var(--amber); }
 
+  .fav-chip .walk-info {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+  }
+
+  #enableAlertsBtn {
+    display: block;
+    width: 100%;
+    margin: 0 0 1.1rem;
+    padding: 0.65rem 1rem;
+    background: var(--panel);
+    border: 1px dashed var(--panel-edge);
+    border-radius: 10px;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    cursor: pointer;
+    text-align: left;
+  }
+  #enableAlertsBtn:hover { border-color: var(--amber); color: var(--amber); }
+
+  #leaveNowBanner {
+    background: linear-gradient(135deg, #1d3a2c, #142a20);
+    border: 1px solid var(--green);
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 1.1rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--green);
+  }
+
+  #alertFilterRow {
+    display: none;
+  }
+
   #lastUpdated {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.72rem;
@@ -183,7 +230,7 @@
 
   .row {
     display: grid;
-    grid-template-columns: 3.6rem 1fr auto;
+    grid-template-columns: 3.6rem 1fr auto auto;
     gap: 0.85rem;
     align-items: center;
     padding: 0.9rem 1rem;
@@ -245,6 +292,26 @@
     letter-spacing: 0.03em;
     text-transform: uppercase;
     margin-top: 0.25rem;
+  }
+
+  .row-bell {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+    color: var(--text-dim);
+    padding: 0.15rem 0 0.15rem 0.5rem;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .row-bell:hover { color: var(--amber); }
+  .row-bell.active { color: var(--amber); }
+
+  .row {
+    position: relative;
+  }
+  .row.alert-target {
+    background: rgba(255, 176, 32, 0.06);
   }
 
   .badge .dot {
@@ -339,6 +406,8 @@
 
 <main>
   <div id="favouritesRow"></div>
+  <button id="enableAlertsBtn" class="hidden">&#128205; Enable walk times &amp; leave-now alerts</button>
+  <div id="leaveNowBanner" class="hidden"></div>
 
   <div id="boardHeader" class="hidden">
     <div class="title-row">
@@ -409,12 +478,15 @@
     if (isFavourite(currentStopId)) {
       favs = favs.filter(f => f.stop_id !== currentStopId);
     } else {
-      favs.push({ stop_id: currentStopId, stop_name: currentStopName });
+      // route/headsign null = "any bus" (no filter) until the user taps
+      // the bell on a specific departure row
+      favs.push({ stop_id: currentStopId, stop_name: currentStopName, route: null, headsign: null });
     }
 
     saveFavourites(favs);
     updateFavouriteToggle();
     renderFavourites();
+    renderBoardFromCache();
   }
 
   function updateFavouriteToggle() {
@@ -425,27 +497,227 @@
     favouriteToggle.title = active ? 'Remove from saved stops' : 'Save this stop';
   }
 
+  // --- Tap-to-select "alert me for this specific bus" ---------------------
+  let lastBoardUpcoming = [];  // the most recently loaded board's departures
+
+  function getCurrentFavourite() {
+    return getFavourites().find(f => f.stop_id === currentStopId);
+  }
+
+  function isAlertTarget(dep) {
+    const fav = getCurrentFavourite();
+    if (!fav || !fav.route) return false;
+    return fav.route === dep.route && (!fav.headsign || fav.headsign === dep.headsign);
+  }
+
+  // Tapping a bell either: favourites the stop (if not already) and sets
+  // this exact route/headsign as the alert target, or if it's already the
+  // target, taps again to clear back to "any bus".
+  function toggleAlertTarget(route, headsign) {
+    let favs = getFavourites();
+    let fav = favs.find(f => f.stop_id === currentStopId);
+
+    if (!fav) {
+      fav = { stop_id: currentStopId, stop_name: currentStopName, route: null, headsign: null };
+      favs.push(fav);
+    }
+
+    const alreadyTarget = fav.route === route && (fav.headsign || null) === (headsign || null);
+    if (alreadyTarget) {
+      fav.route = null;
+      fav.headsign = null;
+    } else {
+      fav.route = route;
+      fav.headsign = headsign || null;
+    }
+
+    saveFavourites(favs);
+    updateFavouriteToggle();
+    renderFavourites();
+    renderBoardFromCache();
+  }
+
+  function renderBoardFromCache() {
+    if (lastBoardUpcoming.length > 0) {
+      board.innerHTML = lastBoardUpcoming.map(rowHtml).join('');
+      attachBellHandlers();
+    }
+  }
+
   function renderFavourites() {
     const favs = getFavourites();
 
     if (favs.length === 0) {
       favouritesRow.innerHTML = '';
+      enableAlertsBtn.classList.add('hidden');
       return;
+    }
+
+    // If we now know the direction for the stop currently being viewed,
+    // backfill it onto the matching favourite so its chip stays accurate
+    if (currentStopId && currentStopDirection) {
+      const fav = favs.find(f => f.stop_id === currentStopId);
+      if (fav && fav.direction !== currentStopDirection) {
+        fav.direction = currentStopDirection;
+        saveFavourites(favs);
+      }
+    }
+
+    if (!locationEnabled) {
+      enableAlertsBtn.classList.remove('hidden');
     }
 
     favouritesRow.innerHTML = favs.map(f => {
       const active = f.stop_id === currentStopId;
-      return `<div class="fav-chip ${active ? 'active-chip' : ''}" data-id="${f.stop_id}" data-name="${escapeHtml(f.stop_name)}">
-                &#9733; ${escapeHtml(f.stop_name)}
+      const walkMin = walkTimesByStop[f.stop_id];
+      const walkHtml = (walkMin !== undefined)
+        ? `<span class="walk-info">&#128694; ${Math.round(walkMin)} min walk</span>`
+        : '';
+      const routeHtml = f.route
+        ? `<span class="walk-info">&middot; Route ${escapeHtml(f.route)}</span>`
+        : (f.direction ? `<span class="walk-info">&middot; &rarr; ${escapeHtml(f.direction)}</span>` : '');
+      return `<div class="fav-chip ${active ? 'active-chip' : ''}" data-id="${f.stop_id}" data-name="${escapeHtml(f.stop_name)}" data-direction="${escapeHtml(f.direction || '')}">
+                &#9733; ${escapeHtml(f.stop_name)} ${routeHtml} ${walkHtml}
               </div>`;
     }).join('');
 
     favouritesRow.querySelectorAll('.fav-chip').forEach(chip => {
-      chip.addEventListener('click', () => selectStop(chip.dataset.id, chip.dataset.name));
+      chip.addEventListener('click', () => selectStop(chip.dataset.id, chip.dataset.name, chip.dataset.direction));
     });
   }
 
   favouriteToggle.addEventListener('click', toggleCurrentFavourite);
+
+  // --- GPS location, walk times, and leave-now alerts --------------------
+  const enableAlertsBtn = document.getElementById('enableAlertsBtn');
+  const leaveNowBanner = document.getElementById('leaveNowBanner');
+
+  let locationEnabled = false;
+  let userLat = null;
+  let userLon = null;
+  const walkTimesByStop = {};       // stop_id -> minutes
+  const notifiedTrips = new Set();  // "stopId|scheduledTime" already alerted
+  let leaveNowTimer = null;
+
+  enableAlertsBtn.addEventListener('click', enableLocationAndAlerts);
+
+  function enableLocationAndAlerts() {
+    if (!('geolocation' in navigator)) {
+      alert('Your browser does not support location access.');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        userLat = position.coords.latitude;
+        userLon = position.coords.longitude;
+        locationEnabled = true;
+        enableAlertsBtn.classList.add('hidden');
+
+        // Keep location roughly up to date if the user is moving
+        navigator.geolocation.watchPosition(
+          (pos) => { userLat = pos.coords.latitude; userLon = pos.coords.longitude; },
+          () => { /* ignore watch errors - we still have the last known fix */ },
+          { enableHighAccuracy: false, maximumAge: 60000 }
+        );
+
+        if ('Notification' in window && Notification.permission === 'default') {
+          Notification.requestPermission();
+        }
+
+        refreshWalkTimesAndLeaveNow();
+        if (leaveNowTimer) clearInterval(leaveNowTimer);
+        leaveNowTimer = setInterval(refreshWalkTimesAndLeaveNow, 30000);
+      },
+      (err) => {
+        alert('Could not get your location: ' + err.message);
+      }
+    );
+  }
+
+  async function refreshWalkTimesAndLeaveNow() {
+    if (!locationEnabled) return;
+    const favs = getFavourites();
+    if (favs.length === 0) return;
+
+    let soonestLeaveIn = null;
+    let soonestLeaveStop = null;
+
+    for (const fav of favs) {
+      try {
+        // Walk time (cached server-side, cheap to call often)
+        const walkRes = await fetch(`/api/walk-time/${fav.stop_id}?lat=${userLat}&lon=${userLon}`);
+        const walkData = await walkRes.json();
+        if (walkData.walk_minutes !== undefined) {
+          walkTimesByStop[fav.stop_id] = walkData.walk_minutes;
+        }
+
+        // Next departure at this stop - respecting this favourite's
+        // route/headsign filter if one is set, otherwise the soonest bus
+        const depRes = await fetch(`/api/departures/${fav.stop_id}`);
+        const depData = await depRes.json();
+        const upcoming = depData.upcoming || [];
+
+        const next = fav.route
+          ? upcoming.find(d => d.route === fav.route &&
+                                (!fav.headsign || d.headsign === fav.headsign))
+          : upcoming[0];
+
+        if (!next) continue;  // no matching bus in the current window
+
+        const walkMin = walkTimesByStop[fav.stop_id];
+        if (walkMin === undefined) continue;
+
+        const leaveIn = next.due_in_minutes - walkMin;
+        const tripKey = `${fav.stop_id}|${next.scheduled_time}`;
+
+        if (leaveIn <= 0 && !notifiedTrips.has(tripKey)) {
+          notifiedTrips.add(tripKey);
+          sendLeaveNowNotification(fav.stop_name, next.route, next.headsign);
+        }
+
+        if (soonestLeaveIn === null || leaveIn < soonestLeaveIn) {
+          soonestLeaveIn = leaveIn;
+          soonestLeaveStop = fav.stop_name;
+        }
+      } catch (e) {
+        // One stop failing shouldn't block the others
+        console.log('Walk/departure check failed for', fav.stop_id, e);
+      }
+    }
+
+    renderFavourites();
+    renderLeaveNowBanner(soonestLeaveIn, soonestLeaveStop);
+  }
+
+  function renderLeaveNowBanner(leaveIn, stopName) {
+    if (leaveIn === null) {
+      leaveNowBanner.classList.add('hidden');
+      return;
+    }
+
+    if (leaveIn <= 0) {
+      leaveNowBanner.textContent = `Leave now for your bus from ${stopName}!`;
+    } else {
+      leaveNowBanner.textContent = `Leave ${stopName} in ${Math.round(leaveIn)} min to catch your bus.`;
+    }
+    leaveNowBanner.classList.remove('hidden');
+  }
+
+  function sendLeaveNowNotification(stopName, route, headsign) {
+    const title = `Leave now for the ${route}!`;
+    const body = `${headsign ? headsign + ' - ' : ''}from ${stopName}`;
+
+    if ('Notification' in window && Notification.permission === 'granted') {
+      if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+        navigator.serviceWorker.ready.then((reg) => {
+          reg.showNotification(title, { body, icon: '/icons/icon-192.png' });
+        });
+      } else {
+        new Notification(title, { body });
+      }
+    }
+  }
 
   emptyState.classList.remove('hidden');
 
@@ -477,16 +749,19 @@
       searchResults.classList.remove('hidden');
       return;
     }
-    searchResults.innerHTML = results.map(r =>
-      `<div class="search-result" data-id="${r.stop_id}" data-name="${r.stop_name}">
-         ${r.stop_name} <span class="sid">${r.stop_id}</span>
-       </div>`
-    ).join('');
+    searchResults.innerHTML = results.map(r => {
+      const directionHtml = r.direction
+        ? `<span class="result-direction">&rarr; towards ${escapeHtml(r.direction)}</span>`
+        : '';
+      return `<div class="search-result" data-id="${r.stop_id}" data-name="${escapeHtml(r.stop_name)}" data-direction="${escapeHtml(r.direction || '')}">
+         ${escapeHtml(r.stop_name)} ${directionHtml}
+       </div>`;
+    }).join('');
     searchResults.classList.remove('hidden');
 
     searchResults.querySelectorAll('.search-result').forEach(el => {
       el.addEventListener('click', () => {
-        selectStop(el.dataset.id, el.dataset.name);
+        selectStop(el.dataset.id, el.dataset.name, el.dataset.direction);
       });
     });
   }
@@ -498,9 +773,12 @@
   });
 
   // --- Selecting a stop -------------------------------------------------
-  function selectStop(stopId, stopName) {
+  let currentStopDirection = null;
+
+  function selectStop(stopId, stopName, direction) {
     currentStopId = stopId;
     currentStopName = stopName;
+    currentStopDirection = direction || null;
     localStorage.setItem('lastStopId', stopId);
     localStorage.setItem('lastStopName', stopName);
 
@@ -508,7 +786,7 @@
     searchResults.classList.add('hidden');
     emptyState.classList.add('hidden');
     boardHeader.classList.remove('hidden');
-    stopNameLabel.textContent = stopName;
+    updateStopNameLabel();
 
     updateFavouriteToggle();
     renderFavourites();
@@ -516,6 +794,13 @@
     loadBoard();
     if (refreshTimer) clearInterval(refreshTimer);
     refreshTimer = setInterval(loadBoard, 30000); // refresh every 30s
+  }
+
+  function updateStopNameLabel() {
+    const directionHtml = currentStopDirection
+      ? ` <span class="stop-direction">&rarr; towards ${escapeHtml(currentStopDirection)}</span>`
+      : '';
+    stopNameLabel.innerHTML = `${escapeHtml(currentStopName)}${directionHtml}`;
   }
 
   async function loadBoard() {
@@ -536,6 +821,13 @@
 
   function renderBoard(data) {
     const upcoming = data.upcoming || [];
+    lastBoardUpcoming = upcoming;
+
+    if (data.stop_direction && data.stop_direction !== currentStopDirection) {
+      currentStopDirection = data.stop_direction;
+      updateStopNameLabel();
+      renderFavourites(); // chips may need their direction filled in too
+    }
 
     if (upcoming.length === 0) {
       board.innerHTML = '<div id="emptyState">No departures in the next 90 minutes.</div>';
@@ -543,10 +835,19 @@
     } else {
       board.innerHTML = upcoming.map(rowHtml).join('');
       board.classList.remove('hidden');
+      attachBellHandlers();
     }
 
     const now = new Date();
     lastUpdated.textContent = `Updated ${now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+  }
+
+  function attachBellHandlers() {
+    board.querySelectorAll('.row-bell').forEach(btn => {
+      btn.addEventListener('click', () => {
+        toggleAlertTarget(btn.dataset.route, btn.dataset.headsign);
+      });
+    });
   }
 
   function rowHtml(dep) {
@@ -572,8 +873,14 @@
       ? `<span class="status ${statusClass}">${statusLabel}</span>`
       : '';
 
+    const isTarget = isAlertTarget(dep);
+    const bellIcon = isTarget ? '&#128276;' : '&#128276;'; // bell (filled by colour, not glyph)
+    const bellTitle = isTarget
+      ? 'Alerts are set for this bus - tap to remove'
+      : 'Tap to get a leave-now alert for this exact bus';
+
     return `
-      <div class="row">
+      <div class="row ${isTarget ? 'alert-target' : ''}">
         <div class="route">${escapeHtml(dep.route)}</div>
         <div>
           <div class="headsign">${escapeHtml(dep.headsign || '')}</div>
@@ -584,6 +891,10 @@
           ${statusHtml}
           <span class="badge ${badgeClass}"><span class="dot"></span>${badgeText}</span>
         </div>
+        <button class="row-bell ${isTarget ? 'active' : ''}"
+                data-route="${escapeHtml(dep.route)}"
+                data-headsign="${escapeHtml(dep.headsign || '')}"
+                title="${bellTitle}">${bellIcon}</button>
       </div>`;
   }
 
