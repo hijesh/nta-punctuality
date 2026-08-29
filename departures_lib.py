@@ -54,6 +54,136 @@ def get_connection():
     return sqlite3.connect(DB_PATH)
 
 
+# --- Usage analytics --------------------------------------------------
+# Kept in a SEPARATE database file from the schedule data, because
+# setup_static_data.py wipes and rebuilds punctuality.sqlite3 on every
+# deploy - we don't want that to erase your usage history too.
+ANALYTICS_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "analytics.sqlite3")
+
+
+def get_analytics_connection():
+    conn = sqlite3.connect(ANALYTICS_DB_PATH)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            stop_id TEXT,
+            stop_name TEXT,
+            visitor_id TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON app_events(event_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_stop ON app_events(stop_id)")
+    conn.commit()
+    return conn
+
+
+def log_event(event_type, stop_id=None, stop_name=None, visitor_id=None):
+    conn = get_analytics_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO app_events (event_type, stop_id, stop_name, visitor_id, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (event_type, stop_id, stop_name, visitor_id,
+             datetime.now(IE_TZ).isoformat(timespec="seconds")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_stats_summary():
+    """Returns a dict of headline usage numbers, the most-viewed stops,
+    and a list of stop locations (for mapping) with their view counts."""
+    conn = get_analytics_connection()
+    try:
+        total_page_views = conn.execute(
+            "SELECT COUNT(*) FROM app_events WHERE event_type = 'page_view'"
+        ).fetchone()[0]
+
+        unique_visitors = conn.execute(
+            "SELECT COUNT(DISTINCT visitor_id) FROM app_events"
+        ).fetchone()[0]
+
+        total_stop_views = conn.execute(
+            "SELECT COUNT(*) FROM app_events WHERE event_type = 'stop_view'"
+        ).fetchone()[0]
+
+        top_stops = conn.execute(
+            """
+            SELECT stop_name, stop_id, COUNT(*) AS views, COUNT(DISTINCT visitor_id) AS visitors
+            FROM app_events
+            WHERE event_type = 'stop_view'
+            GROUP BY stop_id
+            ORDER BY views DESC
+            LIMIT 15
+            """
+        ).fetchall()
+
+        # Every distinct stop ever viewed, for the map (capped generously)
+        all_stop_counts = conn.execute(
+            """
+            SELECT stop_id, stop_name, COUNT(*) AS views
+            FROM app_events
+            WHERE event_type = 'stop_view'
+            GROUP BY stop_id
+            ORDER BY views DESC
+            LIMIT 300
+            """
+        ).fetchall()
+
+        last_7_days_views = conn.execute(
+            """
+            SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS views
+            FROM app_events
+            WHERE event_type = 'page_view'
+              AND created_at >= datetime('now', '-7 days')
+            GROUP BY day
+            ORDER BY day
+            """
+        ).fetchall()
+
+    finally:
+        conn.close()
+
+    # Cross-reference with the schedule database to get each stop's
+    # coordinates for plotting on the map - this reuses data already
+    # collected for the app's core feature (stop lookup), nothing new.
+    stop_locations = []
+    if all_stop_counts:
+        schedule_conn = get_connection()
+        try:
+            for stop_id, stop_name, views in all_stop_counts:
+                row = schedule_conn.execute(
+                    "SELECT stop_lat, stop_lon FROM stops WHERE stop_id = ?", (stop_id,)
+                ).fetchone()
+                if row and row[0] is not None:
+                    stop_locations.append({
+                        "stop_id": stop_id, "stop_name": stop_name,
+                        "lat": float(row[0]), "lon": float(row[1]), "views": views,
+                    })
+        finally:
+            schedule_conn.close()
+
+    return {
+        "total_page_views": total_page_views,
+        "unique_visitors": unique_visitors,
+        "total_stop_views": total_stop_views,
+        "top_stops": [
+            {"stop_name": r[0], "stop_id": r[1], "views": r[2], "visitors": r[3]}
+            for r in top_stops
+        ],
+        "stop_locations": stop_locations,
+        "last_7_days_views": [{"day": r[0], "views": r[1]} for r in last_7_days_views],
+    }
+
+
+
 def search_stops(conn, search_term: str, limit: int = 20):
     rows = conn.execute(
         """
