@@ -236,6 +236,73 @@
   .very-late { color: var(--red); }
   .no-data { color: var(--text-dim); }
 
+  /* Live vs scheduled-only badge */
+  .row .due .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    margin-top: 0.25rem;
+  }
+
+  .badge .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .badge.is-live .dot {
+    background: var(--green);
+    box-shadow: 0 0 0 rgba(61, 220, 132, 0.6);
+    animation: pulse-dot 2s infinite;
+  }
+
+  .badge.is-scheduled .dot {
+    background: var(--text-dim);
+  }
+
+  .badge.is-live { color: var(--green); }
+  .badge.is-scheduled { color: var(--text-dim); }
+
+  @keyframes pulse-dot {
+    0%   { box-shadow: 0 0 0 0 rgba(61, 220, 132, 0.55); }
+    70%  { box-shadow: 0 0 0 6px rgba(61, 220, 132, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(61, 220, 132, 0); }
+  }
+
+  /* Info icon + explainer next to the board title */
+  #liveInfoToggle {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    font-size: 0.95rem;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  #liveInfoToggle:hover { color: var(--amber); }
+
+  #liveInfoPanel {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 10px;
+    padding: 0.75rem 0.9rem;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-bottom: 0.75rem;
+    line-height: 1.5;
+  }
+  #liveInfoPanel .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 0.35rem;
+  }
+
   #emptyState, #loadingState {
     padding: 2.5rem 1rem;
     text-align: center;
@@ -277,8 +344,14 @@
     <div class="title-row">
       <button id="favouriteToggle" title="Save this stop">&#9734;</button>
       <h2 id="stopNameLabel"></h2>
+      <button id="liveInfoToggle" title="What do Live and Scheduled mean?">&#9432;</button>
     </div>
     <span id="lastUpdated"></span>
+  </div>
+
+  <div id="liveInfoPanel" class="hidden">
+    <span class="dot" style="background: var(--green);"></span><strong>Live</strong> - this bus is currently being tracked and its time includes real delay data.<br />
+    <span class="dot" style="background: var(--text-dim);"></span><strong>Scheduled</strong> - no live signal yet for this trip, usually because it's further away or hasn't started. The time shown is from the timetable only.
   </div>
 
   <div id="loadingState" class="hidden">Loading departures...</div>
@@ -300,6 +373,12 @@
   const emptyState = document.getElementById('emptyState');
   const favouritesRow = document.getElementById('favouritesRow');
   const favouriteToggle = document.getElementById('favouriteToggle');
+  const liveInfoToggle = document.getElementById('liveInfoToggle');
+  const liveInfoPanel = document.getElementById('liveInfoPanel');
+
+  liveInfoToggle.addEventListener('click', () => {
+    liveInfoPanel.classList.toggle('hidden');
+  });
 
   let currentStopId = localStorage.getItem('lastStopId');
   let currentStopName = localStorage.getItem('lastStopName');
@@ -472,7 +551,7 @@
 
   function rowHtml(dep) {
     let statusClass = 'no-data';
-    let statusLabel = 'Scheduled';
+    let statusLabel = '';
 
     if (dep.has_live_data) {
       const d = dep.delay_minutes;
@@ -487,6 +566,12 @@
       }
     }
 
+    const badgeClass = dep.has_live_data ? 'is-live' : 'is-scheduled';
+    const badgeText = dep.has_live_data ? 'Live' : 'Scheduled';
+    const statusHtml = statusLabel
+      ? `<span class="status ${statusClass}">${statusLabel}</span>`
+      : '';
+
     return `
       <div class="row">
         <div class="route">${escapeHtml(dep.route)}</div>
@@ -496,7 +581,8 @@
         </div>
         <div class="due">
           <span class="mins ${statusClass}">${dep.due_in_minutes}'</span>
-          <span class="status ${statusClass}">${statusLabel}</span>
+          ${statusHtml}
+          <span class="badge ${badgeClass}"><span class="dot"></span>${badgeText}</span>
         </div>
       </div>`;
   }
