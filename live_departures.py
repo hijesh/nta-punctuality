@@ -18,6 +18,7 @@ import os
 import sqlite3
 import sys
 from datetime import datetime, date, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
@@ -34,6 +35,9 @@ LOOKAHEAD_MINUTES = 90
 
 WEEKDAY_COLUMNS = ["monday", "tuesday", "wednesday", "thursday",
                    "friday", "saturday", "sunday"]
+
+# Ireland's timezone - see note in departures_lib.py for why this matters.
+IE_TZ = ZoneInfo("Europe/Dublin")
 
 
 def gtfs_time_to_seconds(time_str: str) -> int:
@@ -140,8 +144,8 @@ def main():
 
     conn = sqlite3.connect(DB_PATH)
 
-    today = date.today()
-    now = datetime.now()
+    today = datetime.now(IE_TZ).date()
+    now = datetime.now(IE_TZ)
     now_seconds = now.hour * 3600 + now.minute * 60 + now.second
 
     service_ids = get_active_service_ids(conn, today)

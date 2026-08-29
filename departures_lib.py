@@ -9,9 +9,16 @@ import os
 import sqlite3
 import time
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import requests
 from google.transit import gtfs_realtime_pb2
+
+# Ireland's timezone - handles the IST (UTC+1, summer) / GMT (UTC+0, winter)
+# switch automatically. We use this instead of the server's system clock,
+# because cloud servers (like Render) run in UTC regardless of where the
+# app's users actually are.
+IE_TZ = ZoneInfo("Europe/Dublin")
 
 TRIP_UPDATES_URL = "https://api.nationaltransport.ie/gtfsr/v2/TripUpdates"
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "punctuality.sqlite3")
@@ -141,8 +148,8 @@ def fetch_live_delays(api_key: str):
 def get_live_board(conn, stop_id: str, api_key: str, lookahead_minutes: int = 90):
     """Returns a ready-to-serialize list of upcoming departures for a stop,
     combining today's schedule with live delay data."""
-    today = date.today()
-    now = datetime.now()
+    today = datetime.now(IE_TZ).date()
+    now = datetime.now(IE_TZ)
     now_seconds = now.hour * 3600 + now.minute * 60 + now.second
 
     service_ids = get_active_service_ids(conn, today)

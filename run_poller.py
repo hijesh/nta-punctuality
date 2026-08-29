@@ -19,6 +19,7 @@ import sqlite3
 import sys
 import time
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
@@ -33,6 +34,9 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "punc
 # NTA fair usage policy: 1 call per 60 seconds per token. We use 65s for
 # a safety margin against clock drift and network latency.
 POLL_INTERVAL_SECONDS = 65
+
+# Ireland's timezone - see note in departures_lib.py for why this matters.
+IE_TZ = ZoneInfo("Europe/Dublin")
 
 
 def ensure_log_table(conn):
@@ -96,8 +100,8 @@ def poll_once(conn):
     feed = gtfs_realtime_pb2.FeedMessage()
     feed.ParseFromString(response.content)
 
-    polled_at = datetime.now().isoformat(timespec="seconds")
-    service_date = date.today().isoformat()
+    polled_at = datetime.now(IE_TZ).isoformat(timespec="seconds")
+    service_date = datetime.now(IE_TZ).date().isoformat()
 
     rows_logged = 0
     cur = conn.cursor()
@@ -163,13 +167,13 @@ def main():
                 rows_logged = poll_once(conn)
                 poll_count += 1
                 print(
-                    f"[{datetime.now().strftime('%H:%M:%S')}] "
+                    f"[{datetime.now(IE_TZ).strftime('%H:%M:%S')}] "
                     f"Poll #{poll_count}: logged {rows_logged} stop updates."
                 )
             except requests.exceptions.RequestException as e:
                 # Network hiccups happen - log it and keep going rather
                 # than crashing the whole poller
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] "
+                print(f"[{datetime.now(IE_TZ).strftime('%H:%M:%S')}] "
                       f"WARNING: poll failed ({e}). Will retry next cycle.")
 
             elapsed = time.time() - start
