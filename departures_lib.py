@@ -33,25 +33,47 @@ WEEKDAY_COLUMNS = ["monday", "tuesday", "wednesday", "thursday",
 # simple in-memory cache does that: whoever asks first after 60 seconds
 # have passed triggers the real call; everyone else in that window gets
 # the same cached result.
-_live_cache = {"delays": {}, "fetched_at": 0}
+_live_cache = {"data": {"stops": {}, "cancelled_trips": set()}, "fetched_at": 0}
 _CACHE_TTL_SECONDS = 60
 
 
 def get_cached_live_delays(api_key: str):
-    """Returns the delays dict, only calling the real API if the cached
+    """Returns the live data dict, only calling the real API if the cached
     copy is older than the TTL. Shared across all requests/users."""
     now = time.time()
     if now - _live_cache["fetched_at"] < _CACHE_TTL_SECONDS:
-        return _live_cache["delays"]
+        return _live_cache["data"]
 
-    delays = fetch_live_delays(api_key)
-    _live_cache["delays"] = delays
+    data = fetch_live_delays(api_key)
+    _live_cache["data"] = data
     _live_cache["fetched_at"] = now
-    return delays
+    return data
 
 
 def get_connection():
     return sqlite3.connect(DB_PATH)
+
+
+_stops_columns_cache = None
+
+
+def _get_stops_columns(conn):
+    """Returns the set of column names actually present in the stops
+    table. Cached per-process since the schema only changes when
+    setup_static_data.py rebuilds the database (i.e. on deploy)."""
+    global _stops_columns_cache
+    if _stops_columns_cache is None:
+        rows = conn.execute("PRAGMA table_info(stops)").fetchall()
+        _stops_columns_cache = {row[1] for row in rows}  # row[1] = column name
+    return _stops_columns_cache
+
+
+def has_stop_code(conn) -> bool:
+    """stop_code is an optional GTFS field - the short number printed on
+    the physical sign at the stop (different from stop_id, which is an
+    internal identifier). Not every agency populates it, so we check
+    before relying on it."""
+    return "stop_code" in _get_stops_columns(conn)
 
 
 # --- Usage analytics --------------------------------------------------
@@ -77,8 +99,54 @@ def get_analytics_connection():
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON app_events(event_type)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_stop ON app_events(stop_id)")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message TEXT NOT NULL,
+            stop_id TEXT,
+            stop_name TEXT,
+            visitor_id TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     return conn
+
+
+def save_feedback(message, visitor_id, stop_id=None, stop_name=None):
+    conn = get_analytics_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO feedback (message, stop_id, stop_name, visitor_id, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (message, stop_id, stop_name, visitor_id,
+             datetime.now(IE_TZ).isoformat(timespec="seconds")),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_recent_feedback(limit=50):
+    conn = get_analytics_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT message, stop_name, created_at
+            FROM feedback
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return [{"message": r[0], "stop_name": r[1], "created_at": r[2]} for r in rows]
 
 
 def log_event(event_type, stop_id=None, stop_name=None, visitor_id=None):
@@ -185,6 +253,27 @@ def get_stats_summary():
 
 
 def search_stops(conn, search_term: str, limit: int = 20):
+    if has_stop_code(conn):
+        rows = conn.execute(
+            """
+            SELECT stop_id, stop_name, stop_lat, stop_lon, stop_code
+            FROM stops
+            WHERE stop_name LIKE ? OR stop_code LIKE ?
+            ORDER BY stop_name
+            LIMIT ?
+            """,
+            (f"%{search_term}%", f"%{search_term}%", limit),
+        ).fetchall()
+        return [
+            {
+                "stop_id": r[0], "stop_name": r[1], "lat": r[2], "lon": r[3],
+                "stop_code": r[4],
+                "direction": get_stop_direction(conn, r[0]),
+            }
+            for r in rows
+        ]
+
+    # Fallback for schedule data that doesn't include stop_code at all
     rows = conn.execute(
         """
         SELECT stop_id, stop_name, stop_lat, stop_lon
@@ -198,6 +287,7 @@ def search_stops(conn, search_term: str, limit: int = 20):
     return [
         {
             "stop_id": r[0], "stop_name": r[1], "lat": r[2], "lon": r[3],
+            "stop_code": None,
             "direction": get_stop_direction(conn, r[0]),
         }
         for r in rows
@@ -281,26 +371,50 @@ def get_scheduled_departures(conn, stop_id: str, service_ids: set):
 
 
 def fetch_live_delays(api_key: str):
+    """Returns a dict keyed by (trip_id, stop_id) with delay/cancellation
+    info for every stop update in the current live feed, plus a set of
+    trip_ids that are entirely cancelled (which may report no individual
+    stop updates at all, so they need tracking separately)."""
     response = requests.get(TRIP_UPDATES_URL, headers={"x-api-key": api_key}, timeout=15)
     response.raise_for_status()
 
     feed = gtfs_realtime_pb2.FeedMessage()
     feed.ParseFromString(response.content)
 
-    delays = {}
+    CANCELED = gtfs_realtime_pb2.TripDescriptor.CANCELED
+    SKIPPED = gtfs_realtime_pb2.TripUpdate.StopTimeUpdate.SKIPPED
+
+    stop_info = {}
+    cancelled_trip_ids = set()
+
     for entity in feed.entity:
         trip_id = entity.trip_update.trip.trip_id
+        trip_cancelled = entity.trip_update.trip.schedule_relationship == CANCELED
+
+        if trip_cancelled:
+            cancelled_trip_ids.add(trip_id)
+
         for stu in entity.trip_update.stop_time_update:
+            stop_skipped = stu.schedule_relationship == SKIPPED
+
             if stu.HasField("arrival"):
-                delays[(trip_id, stu.stop_id)] = stu.arrival.delay
+                delay = stu.arrival.delay
             elif stu.HasField("departure"):
-                delays[(trip_id, stu.stop_id)] = stu.departure.delay
-    return delays
+                delay = stu.departure.delay
+            else:
+                delay = None
+
+            stop_info[(trip_id, stu.stop_id)] = {
+                "delay": delay,
+                "cancelled": trip_cancelled or stop_skipped,
+            }
+
+    return {"stops": stop_info, "cancelled_trips": cancelled_trip_ids}
 
 
 def get_live_board(conn, stop_id: str, api_key: str, lookahead_minutes: int = 90):
     """Returns a ready-to-serialize list of upcoming departures for a stop,
-    combining today's schedule with live delay data."""
+    combining today's schedule with live delay and cancellation data."""
     today = datetime.now(IE_TZ).date()
     now = datetime.now(IE_TZ)
     now_seconds = now.hour * 3600 + now.minute * 60 + now.second
@@ -309,11 +423,14 @@ def get_live_board(conn, stop_id: str, api_key: str, lookahead_minutes: int = 90
     scheduled = get_scheduled_departures(conn, stop_id, service_ids)
 
     try:
-        live_delays = get_cached_live_delays(api_key)
+        live_data = get_cached_live_delays(api_key)
         live_data_available = True
     except requests.exceptions.RequestException:
-        live_delays = {}
+        live_data = {"stops": {}, "cancelled_trips": set()}
         live_data_available = False
+
+    stop_info = live_data["stops"]
+    cancelled_trip_ids = live_data["cancelled_trips"]
 
     lookahead_seconds = lookahead_minutes * 60
     upcoming = []
@@ -326,7 +443,10 @@ def get_live_board(conn, stop_id: str, api_key: str, lookahead_minutes: int = 90
         if scheduled_seconds > now_seconds + lookahead_seconds:
             continue
 
-        delay_seconds = live_delays.get((trip_id, stop_id))
+        info = stop_info.get((trip_id, stop_id))
+        delay_seconds = info["delay"] if info else None
+        is_cancelled = (trip_id in cancelled_trip_ids) or (info["cancelled"] if info else False)
+
         expected_seconds = scheduled_seconds + (delay_seconds or 0)
         route_display = short_name or long_name or route_id
 
@@ -338,9 +458,12 @@ def get_live_board(conn, stop_id: str, api_key: str, lookahead_minutes: int = 90
             "scheduled_time": f"{sched_h:02d}:{sched_m:02d}",
             "due_in_minutes": round((expected_seconds - now_seconds) / 60),
             "delay_minutes": round(delay_seconds / 60) if delay_seconds is not None else None,
-            "has_live_data": delay_seconds is not None,
+            "has_live_data": delay_seconds is not None or is_cancelled,
+            "cancelled": is_cancelled,
         })
 
+    # Cancelled services float to the top under their scheduled slot rather
+    # than by "due in" time, since that number is meaningless for them
     upcoming.sort(key=lambda d: d["due_in_minutes"])
 
     return {

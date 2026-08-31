@@ -19,6 +19,7 @@ Then open http://localhost:5000 in a browser on the same computer.
 """
 
 import functools
+import html
 import os
 import time
 import uuid
@@ -98,6 +99,7 @@ def api_departures(stop_id):
     board["stop_id"] = stop_id
     board["stop_name"] = stop_info["stop_name"] if stop_info else stop_id
     board["stop_direction"] = stop_info["direction"] if stop_info else None
+    board["stop_code"] = stop_info["stop_code"] if stop_info else None
 
     maybe_log_stop_view(stop_id, board["stop_name"])
 
@@ -148,15 +150,39 @@ def api_walk_time(stop_id):
     return jsonify({"stop_id": stop_id, "walk_minutes": round(minutes, 1)})
 
 
+@app.route("/api/feedback", methods=["POST"])
+def api_feedback():
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+
+    if not message:
+        return jsonify({"error": "Message can't be empty."}), 400
+    if len(message) > 2000:
+        message = message[:2000]
+
+    stop_id = data.get("stop_id") or None
+    stop_name = data.get("stop_name") or None
+    visitor_id, _ = get_or_create_visitor_id()
+
+    lib.save_feedback(message, visitor_id, stop_id=stop_id, stop_name=stop_name)
+    return jsonify({"ok": True})
+
+
 def get_stop_info(conn, stop_id):
+    columns = "stop_name, stop_lat, stop_lon"
+    if lib.has_stop_code(conn):
+        columns += ", stop_code"
+
     row = conn.execute(
-        "SELECT stop_name, stop_lat, stop_lon FROM stops WHERE stop_id = ?",
-        (stop_id,),
+        f"SELECT {columns} FROM stops WHERE stop_id = ?", (stop_id,)
     ).fetchone()
     if not row:
         return None
+
     direction = lib.get_stop_direction(conn, stop_id)
-    return {"stop_name": row[0], "lat": row[1], "lon": row[2], "direction": direction}
+    info = {"stop_name": row[0], "lat": row[1], "lon": row[2], "direction": direction}
+    info["stop_code"] = row[3] if len(row) > 3 else None
+    return info
 
 
 # --- Password-protected stats page ---------------------------------------
@@ -192,10 +218,18 @@ def stats_page():
         for d in stats["last_7_days_views"]
     ) or "<tr><td colspan='2'>No page views logged yet.</td></tr>"
 
+    feedback_items = lib.get_recent_feedback()
+    feedback_html = "".join(
+        f"<div class='feedback-item'><div class='feedback-meta'>{f['created_at']}"
+        f"{' &middot; ' + f['stop_name'] if f['stop_name'] else ''}</div>"
+        f"<div class='feedback-msg'>{html.escape(f['message'])}</div></div>"
+        for f in feedback_items
+    ) or "<p style='color:#6b7686;'>No feedback submitted yet.</p>"
+
     import json
     stop_locations_json = json.dumps(stats["stop_locations"])
 
-    html = f"""
+    page_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -214,6 +248,9 @@ def stats_page():
         th {{ color:#6b7686; font-weight:600; font-size:0.75rem; text-transform:uppercase; }}
         h2 {{ font-size: 1rem; margin-top: 2rem; }}
         #usageMap {{ height: 420px; border-radius: 10px; margin-top: 0.75rem; border: 1px solid #1c2430; }}
+        .feedback-item {{ background:#11161f; border:1px solid #1c2430; border-radius:8px; padding:0.7rem 0.9rem; margin-bottom:0.6rem; }}
+        .feedback-meta {{ font-size:0.72rem; color:#6b7686; margin-bottom:0.3rem; }}
+        .feedback-msg {{ font-size:0.9rem; white-space:pre-wrap; }}
       </style>
     </head>
     <body>
@@ -238,6 +275,9 @@ def stats_page():
         <tr><th>Day</th><th>Views</th></tr>
         {daily_rows}
       </table>
+
+      <h2>Feedback from testers</h2>
+      {feedback_html}
 
       <p style="color:#6b7686; font-size:0.78rem; margin-top:2rem;">
         Note: on free hosting, this data resets whenever the server restarts.
@@ -280,7 +320,7 @@ def stats_page():
     </body>
     </html>
     """
-    return Response(html, mimetype="text/html")
+    return Response(page_html, mimetype="text/html")
 
 
 if __name__ == "__main__":
