@@ -3,9 +3,26 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Live Departures</title>
+<title>Live Departures - Ireland bus & rail times</title>
+<meta name="description" content="Live, real-time bus and train departures for any stop in Ireland - cancellations, walking directions, and leave-now alerts, powered by NTA open data." />
+
+<!-- Social share previews (Facebook, WhatsApp, Slack, etc.) -->
+<meta property="og:title" content="Live Departures - Ireland bus & rail times" />
+<meta property="og:description" content="Real-time bus and train departures for any stop in Ireland, with cancellations and leave-now alerts." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://REPLACE-WITH-YOUR-RENDER-URL.onrender.com/" />
+<meta property="og:image" content="https://REPLACE-WITH-YOUR-RENDER-URL.onrender.com/icons/icon-512.png" />
+<meta name="twitter:card" content="summary" />
+
 <link rel="manifest" href="/manifest.json" />
 <meta name="theme-color" content="#005a9c" />
+<script>
+  // Set theme before first paint, so there's no flash of the wrong theme
+  (function() {
+    var saved = localStorage.getItem('theme');
+    if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  })();
+</script>
 <link rel="icon" href="/icons/icon-192.png" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,10 +33,33 @@
     --panel: #11161f;
     --panel-edge: #1c2430;
     --amber: #ffb020;
+    --on-amber: #16110a;
     --green: #3ddc84;
     --red: #ff5c5c;
     --text-dim: #6b7686;
     --text: #e7ebf0;
+    --board-bg: #050708;
+    --hover-bg: #1a212c;
+    --input-bg: #0d1218;
+    --banner-grad-1: #1d3a2c;
+    --banner-grad-2: #142a20;
+  }
+
+  [data-theme="light"] {
+    --bg: #f7f5f0;
+    --panel: #ffffff;
+    --panel-edge: #e5e1d8;
+    --amber: #b45309;
+    --on-amber: #ffffff;
+    --green: #15803d;
+    --red: #b91c1c;
+    --text-dim: #8a8578;
+    --text: #1a1a1a;
+    --board-bg: #ffffff;
+    --hover-bg: #f0ede4;
+    --input-bg: #ffffff;
+    --banner-grad-1: #e3f3e9;
+    --banner-grad-2: #d3ecdc;
   }
 
   * { box-sizing: border-box; }
@@ -38,6 +78,12 @@
     border-bottom: 1px solid var(--panel-edge);
   }
 
+  .header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
   header .eyebrow {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.7rem;
@@ -46,6 +92,18 @@
     color: var(--amber);
     margin: 0 0 0.35rem;
   }
+
+  #themeToggle {
+    background: none;
+    border: 1px solid var(--panel-edge);
+    border-radius: 8px;
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    padding: 0.2rem 0.5rem;
+    cursor: pointer;
+    line-height: 1;
+  }
+  #themeToggle:hover { border-color: var(--amber); color: var(--amber); }
 
   header h1 {
     margin: 0;
@@ -59,6 +117,23 @@
     padding: 0 1.25rem;
     position: relative;
   }
+
+  #nearbyStopsBtn {
+    display: block;
+    max-width: 640px;
+    margin: 0.6rem auto 0;
+    padding: 0.55rem 1rem;
+    background: none;
+    border: 1px solid var(--panel-edge);
+    border-radius: 10px;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    font-family: inherit;
+    cursor: pointer;
+    width: calc(100% - 2.5rem);
+  }
+  #nearbyStopsBtn:hover { border-color: var(--amber); color: var(--amber); }
+  #nearbyStopsBtn:disabled { opacity: 0.6; cursor: default; }
 
   #stopSearch {
     width: 100%;
@@ -97,7 +172,7 @@
     font-size: 0.92rem;
   }
   .search-result:last-child { border-bottom: none; }
-  .search-result:hover { background: #1a212c; }
+  .search-result:hover { background: var(--hover-bg); }
   .search-result .sid {
     color: var(--text-dim);
     font-family: 'JetBrains Mono', monospace;
@@ -201,7 +276,7 @@
   #enableAlertsBtn:hover { border-color: var(--amber); color: var(--amber); }
 
   #leaveNowBanner {
-    background: linear-gradient(135deg, #1d3a2c, #142a20);
+    background: linear-gradient(135deg, var(--banner-grad-1), var(--banner-grad-2));
     border: 1px solid var(--green);
     border-radius: 10px;
     padding: 0.9rem 1rem;
@@ -222,7 +297,7 @@
   }
 
   .board {
-    background: #050708;
+    background: var(--board-bg);
     border: 1px solid var(--panel-edge);
     border-radius: 10px;
     overflow: hidden;
@@ -245,6 +320,25 @@
     font-weight: 700;
     text-align: left;
     color: var(--text);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+  }
+
+  .op-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5rem;
+    height: 0.95rem;
+    padding: 0 0.15rem;
+    border-radius: 3px;
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: #ffffff;
+    line-height: 1;
   }
 
   .row .headsign {
@@ -359,13 +453,27 @@
     margin: 1.25rem auto 0;
     padding: 0.6rem 1.1rem;
     background: var(--amber);
-    color: #16110a;
+    color: var(--on-amber);
     border: none;
     border-radius: 8px;
     font-weight: 600;
     font-size: 0.85rem;
     cursor: pointer;
   }
+
+  #attribution {
+    margin: 2rem 0 0.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--panel-edge);
+    font-size: 0.72rem;
+    line-height: 1.6;
+    color: var(--text-dim);
+  }
+  #attribution a {
+    color: var(--text-dim);
+    text-decoration: underline;
+  }
+  #attribution a:hover { color: var(--amber); }
 
   .hidden { display: none !important; }
 
@@ -378,7 +486,7 @@
     height: 52px;
     border-radius: 50%;
     background: var(--amber);
-    color: #16110a;
+    color: var(--on-amber);
     border: none;
     font-size: 1.3rem;
     cursor: pointer;
@@ -418,7 +526,7 @@
 
   #feedbackText {
     width: 100%;
-    background: #0d1218;
+    background: var(--input-bg);
     border: 1px solid var(--panel-edge);
     border-radius: 8px;
     color: var(--text);
@@ -453,7 +561,7 @@
 
   #feedbackSubmit {
     background: var(--amber);
-    color: #16110a;
+    color: var(--on-amber);
   }
 
   #feedbackStatus {
@@ -466,12 +574,16 @@
 <body>
 
 <header>
-  <p class="eyebrow">Ireland &middot; Live &middot; GTFS-Realtime</p>
+  <div class="header-top">
+    <p class="eyebrow">Ireland &middot; Live &middot; GTFS-Realtime</p>
+    <button id="themeToggle" title="Switch theme">&#9789;</button>
+  </div>
   <h1>Departures</h1>
   <div class="search-wrap">
     <input id="stopSearch" type="text" placeholder="Search by stop name or number, e.g. Letterbreen or 234561" autocomplete="off" />
     <div id="searchResults" class="hidden"></div>
   </div>
+  <button id="nearbyStopsBtn">&#128205; Stops near me</button>
 </header>
 
 <main>
@@ -503,6 +615,13 @@
   </p>
 
   <button id="installBtn">Install app on this device</button>
+
+  <footer id="attribution">
+    Contains Irish public transport data made available by the
+    <a href="https://www.nationaltransport.ie" target="_blank" rel="noopener">National Transport Authority</a>
+    under the <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">Creative Commons Attribution 4.0</a> licence.
+    Data provided as-is, without warranty, and may not always be accurate or complete.
+  </footer>
 </main>
 
 <button id="feedbackFab" title="Send feedback">&#128172;</button>
@@ -521,6 +640,31 @@
 </div>
 
 <script>
+  // --- Theme toggle (light/dark) -----------------------------------------
+  // Applied first, before anything else, so there's no flash of the wrong
+  // theme while the rest of the page sets up.
+  const THEME_KEY = 'theme';
+  const themeToggle = document.getElementById('themeToggle');
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem(THEME_KEY, theme);
+    themeToggle.innerHTML = theme === 'light' ? '&#9788;' : '&#9789;'; // sun vs moon
+    themeToggle.title = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
+
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeColorMeta) {
+      themeColorMeta.setAttribute('content', theme === 'light' ? '#f7f5f0' : '#005a9c');
+    }
+  }
+
+  applyTheme(localStorage.getItem(THEME_KEY) || 'dark');
+
+  themeToggle.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+    applyTheme(current === 'light' ? 'dark' : 'light');
+  });
+
   const searchInput = document.getElementById('stopSearch');
   const searchResults = document.getElementById('searchResults');
   const board = document.getElementById('board');
@@ -848,8 +992,11 @@
       const codeHtml = r.stop_code
         ? `<span class="sid">Stop ${escapeHtml(r.stop_code)}</span>`
         : '';
+      const distanceHtml = (r.distance_km !== undefined)
+        ? `<span class="sid">${r.distance_km < 1 ? Math.round(r.distance_km * 1000) + ' m' : r.distance_km.toFixed(1) + ' km'}</span>`
+        : '';
       return `<div class="search-result" data-id="${r.stop_id}" data-name="${escapeHtml(r.stop_name)}" data-direction="${escapeHtml(r.direction || '')}">
-         ${escapeHtml(r.stop_name)} ${codeHtml} ${directionHtml}
+         ${escapeHtml(r.stop_name)} ${distanceHtml} ${codeHtml} ${directionHtml}
        </div>`;
     }).join('');
     searchResults.classList.remove('hidden');
@@ -859,6 +1006,54 @@
         selectStop(el.dataset.id, el.dataset.name, el.dataset.direction);
       });
     });
+  }
+
+  // --- Stops near me (works immediately, no favourite needed first) -----
+  const nearbyStopsBtn = document.getElementById('nearbyStopsBtn');
+
+  nearbyStopsBtn.addEventListener('click', () => {
+    if (userLat !== null && userLon !== null) {
+      loadNearbyStops(userLat, userLon);
+      return;
+    }
+
+    if (!('geolocation' in navigator)) {
+      alert('Your browser does not support location access.');
+      return;
+    }
+
+    nearbyStopsBtn.disabled = true;
+    nearbyStopsBtn.textContent = 'Locating...';
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        userLat = position.coords.latitude;
+        userLon = position.coords.longitude;
+        loadNearbyStops(userLat, userLon);
+      },
+      (err) => {
+        nearbyStopsBtn.disabled = false;
+        nearbyStopsBtn.textContent = '\u{1F4CD} Stops near me';
+        alert('Could not get your location: ' + err.message);
+      }
+    );
+  });
+
+  async function loadNearbyStops(lat, lon) {
+    nearbyStopsBtn.disabled = true;
+    nearbyStopsBtn.textContent = 'Finding nearby stops...';
+
+    try {
+      const res = await fetch(`/api/nearby-stops?lat=${lat}&lon=${lon}`);
+      const data = await res.json();
+      renderSearchResults(data.results || []);
+    } catch (e) {
+      searchResults.innerHTML = '<div class="search-result">Could not load nearby stops.</div>';
+      searchResults.classList.remove('hidden');
+    } finally {
+      nearbyStopsBtn.disabled = false;
+      nearbyStopsBtn.textContent = '\u{1F4CD} Stops near me';
+    }
   }
 
   document.addEventListener('click', (e) => {
@@ -960,16 +1155,22 @@
     });
   }
 
+  function operatorBadgeHtml(dep) {
+    if (!dep.operator_label) return '';
+    return `<span class="op-badge" style="background:${escapeHtml(dep.operator_color || '#6b7686')};">${escapeHtml(dep.operator_label)}</span>`;
+  }
+
   function rowHtml(dep) {
     const isTarget = isAlertTarget(dep);
     const bellTitle = isTarget
       ? 'Alerts are set for this bus - tap to remove'
       : 'Tap to get a leave-now alert for this exact bus';
+    const badgeHtml = operatorBadgeHtml(dep);
 
     if (dep.cancelled) {
       return `
         <div class="row cancelled-row ${isTarget ? 'alert-target' : ''}">
-          <div class="route">${escapeHtml(dep.route)}</div>
+          <div class="route">${badgeHtml}${escapeHtml(dep.route)}</div>
           <div>
             <div class="headsign">${escapeHtml(dep.headsign || '')}</div>
             <span class="sched sched-strike">sched ${dep.scheduled_time}</span>
@@ -999,7 +1200,7 @@
 
     return `
       <div class="row ${isTarget ? 'alert-target' : ''}">
-        <div class="route">${escapeHtml(dep.route)}</div>
+        <div class="route">${badgeHtml}${escapeHtml(dep.route)}</div>
         <div>
           <div class="headsign">${escapeHtml(dep.headsign || '')}</div>
           <span class="sched">sched ${dep.scheduled_time}</span>

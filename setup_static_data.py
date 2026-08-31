@@ -29,10 +29,12 @@ DB_PATH = os.path.join(DATA_DIR, "punctuality.sqlite3")
 # The GTFS spec defines these standard files inside the zip. calendar.txt
 # and calendar_dates.txt tell us which trips run on which days (weekday vs
 # weekend vs public-holiday exceptions) - needed to build an accurate
-# "departures today" board, not just a static timetable.
+# "departures today" board, not just a static timetable. agency.txt tells
+# us which company/mode operates each route (Dublin Bus, Luas, Irish Rail,
+# etc.) - needed for the operator icons.
 NEEDED_FILES = [
     "routes.txt", "trips.txt", "stops.txt", "stop_times.txt",
-    "calendar.txt", "calendar_dates.txt",
+    "calendar.txt", "calendar_dates.txt", "agency.txt",
 ]
 
 

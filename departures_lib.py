@@ -76,6 +76,142 @@ def has_stop_code(conn) -> bool:
     return "stop_code" in _get_stops_columns(conn)
 
 
+def get_nearby_stops(conn, lat: float, lon: float, limit: int = 8, radius_km: float = 3.0):
+    """Returns the closest stops to a given point, sorted by straight-line
+    distance. Uses a simple lat/lon bounding-box pre-filter (fast, works
+    with a plain index-free query) before computing exact distance in
+    Python - avoids scanning every stop in the country for each request.
+
+    Straight-line distance is deliberately used here rather than a real
+    walking route: this is just for finding nearby candidates to pick
+    from, not the precise "leave now" timing (which already uses the
+    accurate walking-route service once a stop is actually selected)."""
+    import math
+
+    # Roughly convert the radius in km to a lat/lon degree delta.
+    # 1 degree latitude =~ 111 km everywhere; longitude shrinks with
+    # latitude, so widen that box a bit to not miss valid stops.
+    lat_delta = radius_km / 111.0
+    lon_delta = radius_km / (111.0 * max(0.2, math.cos(math.radians(lat))))
+
+    include_code = has_stop_code(conn)
+    columns = "stop_id, stop_name, stop_lat, stop_lon" + (", stop_code" if include_code else "")
+
+    rows = conn.execute(
+        f"""
+        SELECT {columns}
+        FROM stops
+        WHERE stop_lat BETWEEN ? AND ?
+          AND stop_lon BETWEEN ? AND ?
+        """,
+        (lat - lat_delta, lat + lat_delta, lon - lon_delta, lon + lon_delta),
+    ).fetchall()
+
+    def haversine_km(lat1, lon1, lat2, lon2):
+        R = 6371.0
+        p1, p2 = math.radians(lat1), math.radians(lat2)
+        dp = math.radians(lat2 - lat1)
+        dl = math.radians(lon2 - lon1)
+        a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+        return R * 2 * math.asin(math.sqrt(a))
+
+    candidates = []
+    for row in rows:
+        stop_id, stop_name, stop_lat, stop_lon = row[0], row[1], row[2], row[3]
+        stop_code = row[4] if include_code and len(row) > 4 else None
+        if stop_lat is None or stop_lon is None:
+            continue
+        distance_km = haversine_km(lat, lon, float(stop_lat), float(stop_lon))
+        candidates.append({
+            "stop_id": stop_id, "stop_name": stop_name,
+            "lat": stop_lat, "lon": stop_lon, "stop_code": stop_code,
+            "distance_km": round(distance_km, 2),
+            "direction": get_stop_direction(conn, stop_id),
+        })
+
+    candidates.sort(key=lambda s: s["distance_km"])
+    return candidates[:limit]
+
+
+# --- Operator/mode identification ----------------------------------------
+# Used to show a small colored badge (Luas, DART/Rail, Dublin Bus, Bus
+# Éireann, Go-Ahead) next to each departure, so riders can tell at a
+# glance which company/mode a route belongs to.
+
+_routes_columns_cache = None
+_agency_table_exists_cache = None
+_agency_name_cache = {}
+
+
+def _get_routes_columns(conn):
+    global _routes_columns_cache
+    if _routes_columns_cache is None:
+        rows = conn.execute("PRAGMA table_info(routes)").fetchall()
+        _routes_columns_cache = {row[1] for row in rows}
+    return _routes_columns_cache
+
+
+def has_agency_id(conn) -> bool:
+    return "agency_id" in _get_routes_columns(conn)
+
+
+def _agency_table_exists(conn) -> bool:
+    global _agency_table_exists_cache
+    if _agency_table_exists_cache is None:
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='agency'"
+        ).fetchone()
+        _agency_table_exists_cache = row is not None
+    return _agency_table_exists_cache
+
+
+def get_agency_name(conn, agency_id):
+    """Looks up an agency's display name, caching results since this is
+    called once per departure row and there are only a handful of
+    distinct agencies in the whole dataset."""
+    if not agency_id or not _agency_table_exists(conn):
+        return None
+    if agency_id in _agency_name_cache:
+        return _agency_name_cache[agency_id]
+
+    row = conn.execute(
+        "SELECT agency_name FROM agency WHERE agency_id = ?", (agency_id,)
+    ).fetchone()
+    name = row[0] if row else None
+    _agency_name_cache[agency_id] = name
+    return name
+
+
+# GTFS route_type codes relevant here: 0 = Tram/Luas, 2 = Rail, 3 = Bus
+def classify_operator(route_type, agency_name, route_short_name, route_long_name):
+    """Returns a small badge {label, color} identifying the operator/mode
+    for a route, based on GTFS route_type plus text matching on the
+    agency/route names (since NTA's feed doesn't cleanly separate Luas
+    Red vs Green as distinct route_types - both are route_type 0)."""
+    blob = " ".join(
+        str(x) for x in (agency_name, route_long_name, route_short_name) if x
+    ).lower()
+
+    if route_type == "0" or "luas" in blob:
+        if "green" in blob:
+            return {"label": "LUAS", "color": "#00a651"}
+        return {"label": "LUAS", "color": "#e4002b"}  # Red Line is the default Luas color
+
+    if route_type == "2" or "rail" in blob or "iarnr" in blob:
+        return {"label": "RAIL", "color": "#0057a8"}
+
+    if "bus éireann" in blob or "bus eireann" in blob:
+        return {"label": "B.É.", "color": "#8a1538"}
+
+    if "go-ahead" in blob or "goahead" in blob or "go ahead" in blob:
+        return {"label": "GA", "color": "#00838f"}
+
+    if "dublin bus" in blob:
+        return {"label": "DB", "color": "#0057a8"}
+
+    return {"label": "BUS", "color": "#6b7686"}
+
+
 # --- Usage analytics --------------------------------------------------
 # Kept in a SEPARATE database file from the schedule data, because
 # setup_static_data.py wipes and rebuilds punctuality.sqlite3 on every
@@ -352,6 +488,8 @@ def get_scheduled_departures(conn, stop_id: str, service_ids: set):
     if not service_ids:
         return []
 
+    agency_col = ", r.agency_id" if has_agency_id(conn) else ", NULL as agency_id"
+
     placeholders = ",".join("?" for _ in service_ids)
     query = f"""
         SELECT
@@ -360,7 +498,9 @@ def get_scheduled_departures(conn, stop_id: str, service_ids: set):
             t.route_id,
             t.trip_headsign,
             r.route_short_name,
-            r.route_long_name
+            r.route_long_name,
+            r.route_type
+            {agency_col}
         FROM stop_times st
         JOIN trips t ON t.trip_id = st.trip_id
         JOIN routes r ON r.route_id = t.route_id
@@ -435,7 +575,7 @@ def get_live_board(conn, stop_id: str, api_key: str, lookahead_minutes: int = 90
     lookahead_seconds = lookahead_minutes * 60
     upcoming = []
 
-    for trip_id, arrival_time, route_id, headsign, short_name, long_name in scheduled:
+    for trip_id, arrival_time, route_id, headsign, short_name, long_name, route_type, agency_id in scheduled:
         scheduled_seconds = gtfs_time_to_seconds(arrival_time)
 
         if scheduled_seconds < now_seconds:
@@ -452,6 +592,9 @@ def get_live_board(conn, stop_id: str, api_key: str, lookahead_minutes: int = 90
 
         sched_h, sched_m = divmod(scheduled_seconds // 60, 60)
 
+        agency_name = get_agency_name(conn, agency_id)
+        operator_badge = classify_operator(route_type, agency_name, short_name, long_name)
+
         upcoming.append({
             "route": route_display,
             "headsign": headsign or "",
@@ -460,6 +603,8 @@ def get_live_board(conn, stop_id: str, api_key: str, lookahead_minutes: int = 90
             "delay_minutes": round(delay_seconds / 60) if delay_seconds is not None else None,
             "has_live_data": delay_seconds is not None or is_cancelled,
             "cancelled": is_cancelled,
+            "operator_label": operator_badge["label"],
+            "operator_color": operator_badge["color"],
         })
 
     # Cancelled services float to the top under their scheduled slot rather

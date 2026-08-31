@@ -84,6 +84,23 @@ def api_search_stops():
     return jsonify({"results": results})
 
 
+@app.route("/api/nearby-stops")
+def api_nearby_stops():
+    try:
+        lat = float(request.args.get("lat"))
+        lon = float(request.args.get("lon"))
+    except (TypeError, ValueError):
+        return jsonify({"error": "lat and lon query parameters are required."}), 400
+
+    conn = lib.get_connection()
+    try:
+        results = lib.get_nearby_stops(conn, lat, lon)
+    finally:
+        conn.close()
+
+    return jsonify({"results": results})
+
+
 @app.route("/api/departures/<stop_id>")
 def api_departures(stop_id):
     if not API_KEY:
