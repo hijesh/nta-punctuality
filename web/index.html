@@ -370,13 +370,24 @@
   .very-late { color: var(--red); }
   .no-data { color: var(--text-dim); }
 
-  /* Cancelled service */
+  /* Cancelled service - a solid high-contrast badge rather than just
+     colored text, since relying on a subtle color shift alone isn't
+     reliable enough (outdoor glare, color-blindness, low screen brightness) */
   .row.cancelled-row {
-    background: rgba(255, 92, 92, 0.06);
+    background: rgba(220, 38, 38, 0.18);
+    box-shadow: inset 4px 0 0 #dc2626;
   }
   .cancelled-label {
-    color: var(--red) !important;
-    font-size: 0.8rem !important;
+    display: inline-block;
+    background: #dc2626;
+    color: #ffffff !important;
+    font-weight: 800 !important;
+    font-size: 0.68rem !important;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    line-height: 1;
   }
   .sched-strike {
     text-decoration: line-through;
@@ -400,11 +411,12 @@
     background: none;
     border: none;
     cursor: pointer;
-    font-size: 0.85rem;
     color: var(--text-dim);
     padding: 0.1rem 0.2rem;
     line-height: 1;
     flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
   }
   .row-share-trip:hover { color: var(--green); }
 
@@ -692,7 +704,7 @@
 
   <div id="board" class="board hidden"></div>
   <p id="boardLegend" class="board-legend hidden">
-    min &middot; <span class="on-time">green</span> = live &middot; <span class="no-data">grey</span> = scheduled &middot; <span class="cancelled-label">red</span> = cancelled
+    min &middot; <span class="on-time">green</span> = live &middot; <span class="no-data">grey</span> = scheduled &middot; <span class="cancelled-label" style="font-size:0.6rem;">cancelled</span> = no service
   </p>
 
   <button id="installBtn">Install app on this device</button>
@@ -1302,25 +1314,25 @@
                 data-headsign="${escapeHtml(dep.headsign || '')}"
                 data-scheduled="${escapeHtml(dep.scheduled_time)}"
                 data-due="${dep.due_in_minutes}"
-                title="Share this exact bus with a friend">&#128228;</button>`;
+                title="Share this exact bus with a friend">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/>
+            <path d="M16 6l-4-4-4 4"/>
+            <path d="M12 2v14"/>
+          </svg>
+        </button>`;
 
     if (dep.cancelled) {
       return `
-        <div class="row cancelled-row ${isTarget ? 'alert-target' : ''} ${isShared ? 'shared-trip-highlight' : ''}">
+        <div class="row cancelled-row ${isShared ? 'shared-trip-highlight' : ''}">
           <div class="route">${badgeHtml}${escapeHtml(dep.route)}</div>
           <div>
             <div class="headsign">${escapeHtml(dep.headsign || '')}</div>
             <span class="sched sched-strike">sched ${dep.scheduled_time}</span>
           </div>
           <div class="due">
-            <span class="mins cancelled-label">--</span>
+            <span class="mins cancelled-label">Cancelled</span>
           </div>
-          <button class="row-bell ${isTarget ? 'active' : ''}"
-                  data-route="${escapeHtml(dep.route)}"
-                  data-headsign="${escapeHtml(dep.headsign || '')}"
-                  data-scheduled="${escapeHtml(dep.scheduled_time)}"
-                  title="${bellTitle}">&#128276;</button>
-          ${shareTripBtn}
         </div>`;
     }
 
@@ -1514,7 +1526,10 @@
     });
     const url = `${window.location.origin}/?${params.toString()}`;
     const destination = headsign ? ` to ${headsign}` : '';
-    const text = `Want to join me? I'm catching the ${route}${destination} from ${currentStopName}, leaving at ${scheduledTime} (in about ${dueMinutes} min). Here's the live bus:`;
+    // "as of just now" makes clear the minutes are a snapshot, not live -
+    // by the time a friend opens the link, the real countdown (which the
+    // linked page shows correctly) will have moved on.
+    const text = `Want to join me? I'm catching the ${route}${destination} from ${currentStopName}, scheduled for ${scheduledTime} (about ${dueMinutes} min away as of just now). Tap for the live countdown:`;
     return { url, text, title: `Route ${route}${destination}` };
   }
 
