@@ -307,7 +307,7 @@
   .row {
     position: relative;
     display: grid;
-    grid-template-columns: 2.4rem 1fr 2.6rem auto;
+    grid-template-columns: 2.4rem 1fr 2.6rem auto auto;
     gap: 0.6rem;
     align-items: center;
     padding: 0.55rem 0.75rem;
@@ -396,8 +396,48 @@
   .row-bell:hover { color: var(--amber); }
   .row-bell.active { color: var(--amber); }
 
+  .row-share-trip {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    padding: 0.1rem 0.2rem;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+  .row-share-trip:hover { color: var(--green); }
+
   .row.alert-target {
     background: rgba(255, 176, 32, 0.06);
+  }
+
+  .row.shared-trip-highlight {
+    background: rgba(61, 220, 132, 0.08);
+    box-shadow: inset 3px 0 0 var(--green);
+  }
+
+  #sharedTripBanner {
+    background: rgba(61, 220, 132, 0.1);
+    border: 1px solid var(--green);
+    border-radius: 10px;
+    padding: 0.75rem 0.9rem;
+    margin-bottom: 0.9rem;
+    font-size: 0.85rem;
+    color: var(--green);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  #sharedTripBanner button {
+    background: none;
+    border: none;
+    color: var(--green);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    flex-shrink: 0;
   }
 
   .board-legend {
@@ -461,6 +501,42 @@
     cursor: pointer;
   }
 
+  #shareBtn {
+    display: block;
+    margin: 0.75rem auto 0;
+    padding: 0.6rem 1.1rem;
+    background: none;
+    color: var(--text-dim);
+    border: 1px solid var(--panel-edge);
+    border-radius: 8px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  #shareBtn:hover { border-color: var(--amber); color: var(--amber); }
+
+  .share-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    margin: 0.75rem 0;
+  }
+  .share-option {
+    display: block;
+    padding: 0.7rem 0.9rem;
+    background: var(--input-bg);
+    border: 1px solid var(--panel-edge);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 0.9rem;
+    text-decoration: none;
+    text-align: left;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .share-option:hover { border-color: var(--amber); }
+
   #attribution {
     margin: 2rem 0 0.5rem;
     padding-top: 1rem;
@@ -494,7 +570,7 @@
     z-index: 50;
   }
 
-  #feedbackPanel {
+  #feedbackPanel, #sharePanel {
     position: fixed;
     inset: 0;
     background: rgba(0,0,0,0.55);
@@ -609,12 +685,18 @@
   <div id="loadingState" class="hidden">Loading departures...</div>
   <div id="emptyState" class="hidden">Search for a stop above to see live departures.</div>
 
+  <div id="sharedTripBanner" class="hidden">
+    <span id="sharedTripBannerText"></span>
+    <button id="sharedTripBannerDismiss" title="Dismiss">&times;</button>
+  </div>
+
   <div id="board" class="board hidden"></div>
   <p id="boardLegend" class="board-legend hidden">
     min &middot; <span class="on-time">green</span> = live &middot; <span class="no-data">grey</span> = scheduled &middot; <span class="cancelled-label">red</span> = cancelled
   </p>
 
   <button id="installBtn">Install app on this device</button>
+  <button id="shareBtn">&#128228; Share this app</button>
 
   <footer id="attribution">
     Contains Irish public transport data made available by the
@@ -623,6 +705,21 @@
     Data provided as-is, without warranty, and may not always be accurate or complete.
   </footer>
 </main>
+
+<div id="sharePanel" class="hidden">
+  <div class="feedback-panel-inner">
+    <h3>Share this app</h3>
+    <p class="feedback-hint">Send it to someone who could use live bus times.</p>
+    <div class="share-options">
+      <a id="shareWhatsApp" class="share-option" href="#" target="_blank" rel="noopener">&#128241; WhatsApp</a>
+      <button id="shareCopyLink" class="share-option">&#128279; Copy link</button>
+    </div>
+    <div class="feedback-actions">
+      <button id="shareCancel">Close</button>
+    </div>
+    <p id="shareStatus" class="hidden"></p>
+  </div>
+</div>
 
 <button id="feedbackFab" title="Send feedback">&#128172;</button>
 
@@ -741,28 +838,39 @@
   function isAlertTarget(dep) {
     const fav = getCurrentFavourite();
     if (!fav || !fav.route) return false;
-    return fav.route === dep.route && (!fav.headsign || fav.headsign === dep.headsign);
+    return fav.route === dep.route
+        && (fav.headsign || '') === (dep.headsign || '')
+        && fav.scheduled_time === dep.scheduled_time;
   }
 
   // Tapping a bell either: favourites the stop (if not already) and sets
-  // this exact route/headsign as the alert target, or if it's already the
-  // target, taps again to clear back to "any bus".
-  function toggleAlertTarget(route, headsign) {
+  // this exact departure (route + destination + scheduled time) as the
+  // alert target, or if it's already the target, taps again to clear back
+  // to "any bus". Matching on scheduled_time (not just route/headsign) is
+  // what makes this track one specific trip rather than any bus on that
+  // route/direction - two different departures can share a route and
+  // destination, and only the scheduled time tells them apart.
+  function toggleAlertTarget(route, headsign, scheduledTime) {
     let favs = getFavourites();
     let fav = favs.find(f => f.stop_id === currentStopId);
 
     if (!fav) {
-      fav = { stop_id: currentStopId, stop_name: currentStopName, route: null, headsign: null };
+      fav = { stop_id: currentStopId, stop_name: currentStopName, route: null, headsign: null, scheduled_time: null };
       favs.push(fav);
     }
 
-    const alreadyTarget = fav.route === route && (fav.headsign || null) === (headsign || null);
+    const alreadyTarget = fav.route === route
+        && (fav.headsign || '') === (headsign || '')
+        && fav.scheduled_time === scheduledTime;
+
     if (alreadyTarget) {
       fav.route = null;
       fav.headsign = null;
+      fav.scheduled_time = null;
     } else {
       fav.route = route;
       fav.headsign = headsign || null;
+      fav.scheduled_time = scheduledTime;
     }
 
     saveFavourites(favs);
@@ -808,7 +916,7 @@
         ? `<span class="walk-info">&#128694; ${Math.round(walkMin)} min walk</span>`
         : '';
       const routeHtml = f.route
-        ? `<span class="walk-info">&middot; Route ${escapeHtml(f.route)}</span>`
+        ? `<span class="walk-info">&middot; Route ${escapeHtml(f.route)} @ ${escapeHtml(f.scheduled_time || '')}</span>`
         : (f.direction ? `<span class="walk-info">&middot; &rarr; ${escapeHtml(f.direction)}</span>` : '');
       return `<div class="fav-chip ${active ? 'active-chip' : ''}" data-id="${f.stop_id}" data-name="${escapeHtml(f.stop_name)}" data-direction="${escapeHtml(f.direction || '')}">
                 &#9733; ${escapeHtml(f.stop_name)} ${routeHtml} ${walkHtml}
@@ -886,8 +994,10 @@
           walkTimesByStop[fav.stop_id] = walkData.walk_minutes;
         }
 
-        // Next departure at this stop - respecting this favourite's
-        // route/headsign filter if one is set, otherwise the soonest bus.
+        // Next departure at this stop - respecting this favourite's exact
+        // route + destination + scheduled-time target if one is set
+        // (matching the specific trip the bell was tapped on, not just
+        // any bus on that route/direction), otherwise the soonest bus.
         // Cancelled services are skipped entirely - no point alerting
         // someone to rush for a bus that isn't coming.
         const depRes = await fetch(`/api/departures/${fav.stop_id}`);
@@ -896,10 +1006,11 @@
 
         const next = fav.route
           ? upcoming.find(d => d.route === fav.route &&
-                                (!fav.headsign || d.headsign === fav.headsign))
+                                (fav.headsign || '') === (d.headsign || '') &&
+                                fav.scheduled_time === d.scheduled_time)
           : upcoming[0];
 
-        if (!next) continue;  // no matching (non-cancelled) bus in the window
+        if (!next) continue;  // that exact trip isn't in the current window (already departed or too far out)
 
         const walkMin = walkTimesByStop[fav.stop_id];
         if (walkMin === undefined) continue;
@@ -1065,6 +1176,7 @@
   // --- Selecting a stop -------------------------------------------------
   let currentStopDirection = null;
   let currentStopCode = null;
+  let sharedTripTarget = null;  // {route, headsign, scheduled_time} from a shared-trip link, if any
 
   function selectStop(stopId, stopName, direction) {
     currentStopId = stopId;
@@ -1119,6 +1231,11 @@
     lastBoardUpcoming = upcoming;
 
     let stopHeaderChanged = false;
+    if (data.stop_name && data.stop_name !== currentStopName) {
+      currentStopName = data.stop_name;
+      localStorage.setItem('lastStopName', data.stop_name);
+      stopHeaderChanged = true;
+    }
     if (data.stop_direction && data.stop_direction !== currentStopDirection) {
       currentStopDirection = data.stop_direction;
       stopHeaderChanged = true;
@@ -1150,7 +1267,12 @@
   function attachBellHandlers() {
     board.querySelectorAll('.row-bell').forEach(btn => {
       btn.addEventListener('click', () => {
-        toggleAlertTarget(btn.dataset.route, btn.dataset.headsign);
+        toggleAlertTarget(btn.dataset.route, btn.dataset.headsign, btn.dataset.scheduled);
+      });
+    });
+    board.querySelectorAll('.row-share-trip').forEach(btn => {
+      btn.addEventListener('click', () => {
+        shareTripDeparture(btn.dataset.route, btn.dataset.headsign, btn.dataset.scheduled, btn.dataset.due);
       });
     });
   }
@@ -1160,16 +1282,31 @@
     return `<span class="op-badge" style="background:${escapeHtml(dep.operator_color || '#6b7686')};">${escapeHtml(dep.operator_label)}</span>`;
   }
 
+  function isSharedTripMatch(dep) {
+    if (!sharedTripTarget) return false;
+    return dep.route === sharedTripTarget.route
+        && (dep.headsign || '') === (sharedTripTarget.headsign || '')
+        && dep.scheduled_time === sharedTripTarget.scheduled_time;
+  }
+
   function rowHtml(dep) {
     const isTarget = isAlertTarget(dep);
+    const isShared = isSharedTripMatch(dep);
     const bellTitle = isTarget
       ? 'Alerts are set for this bus - tap to remove'
       : 'Tap to get a leave-now alert for this exact bus';
     const badgeHtml = operatorBadgeHtml(dep);
+    const shareTripBtn = `
+        <button class="row-share-trip"
+                data-route="${escapeHtml(dep.route)}"
+                data-headsign="${escapeHtml(dep.headsign || '')}"
+                data-scheduled="${escapeHtml(dep.scheduled_time)}"
+                data-due="${dep.due_in_minutes}"
+                title="Share this exact bus with a friend">&#128228;</button>`;
 
     if (dep.cancelled) {
       return `
-        <div class="row cancelled-row ${isTarget ? 'alert-target' : ''}">
+        <div class="row cancelled-row ${isTarget ? 'alert-target' : ''} ${isShared ? 'shared-trip-highlight' : ''}">
           <div class="route">${badgeHtml}${escapeHtml(dep.route)}</div>
           <div>
             <div class="headsign">${escapeHtml(dep.headsign || '')}</div>
@@ -1181,7 +1318,9 @@
           <button class="row-bell ${isTarget ? 'active' : ''}"
                   data-route="${escapeHtml(dep.route)}"
                   data-headsign="${escapeHtml(dep.headsign || '')}"
+                  data-scheduled="${escapeHtml(dep.scheduled_time)}"
                   title="${bellTitle}">&#128276;</button>
+          ${shareTripBtn}
         </div>`;
     }
 
@@ -1199,7 +1338,7 @@
     }
 
     return `
-      <div class="row ${isTarget ? 'alert-target' : ''}">
+      <div class="row ${isTarget ? 'alert-target' : ''} ${isShared ? 'shared-trip-highlight' : ''}">
         <div class="route">${badgeHtml}${escapeHtml(dep.route)}</div>
         <div>
           <div class="headsign">${escapeHtml(dep.headsign || '')}</div>
@@ -1211,7 +1350,9 @@
         <button class="row-bell ${isTarget ? 'active' : ''}"
                 data-route="${escapeHtml(dep.route)}"
                 data-headsign="${escapeHtml(dep.headsign || '')}"
+                data-scheduled="${escapeHtml(dep.scheduled_time)}"
                 title="${bellTitle}">&#128276;</button>
+        ${shareTripBtn}
       </div>`;
   }
 
@@ -1221,9 +1362,46 @@
     return div.innerHTML;
   }
 
-  // --- Restore last-viewed stop on load ---------------------------------
+  // --- Shared-trip links ---------------------------------------------------
+  // If someone opened a link generated by the per-row share button, the URL
+  // carries ?stop=&route=&headsign=&sched= identifying one exact departure.
+  // This takes priority over restoring the last-viewed stop.
+  const sharedTripBanner = document.getElementById('sharedTripBanner');
+  const sharedTripBannerText = document.getElementById('sharedTripBannerText');
+  const sharedTripBannerDismiss = document.getElementById('sharedTripBannerDismiss');
+
+  sharedTripBannerDismiss.addEventListener('click', () => {
+    sharedTripTarget = null;
+    sharedTripBanner.classList.add('hidden');
+    renderBoardFromCache();
+  });
+
+  const urlParams = new URLSearchParams(window.location.search);
+  const sharedStopId = urlParams.get('stop');
+
+  // --- Restore last-viewed stop on load, or load a shared trip instead ---
   renderFavourites();
-  if (currentStopId && currentStopName) {
+
+  if (sharedStopId) {
+    sharedTripTarget = {
+      route: urlParams.get('route') || '',
+      headsign: urlParams.get('headsign') || '',
+      scheduled_time: urlParams.get('sched') || '',
+    };
+
+    const destination = sharedTripTarget.headsign ? ` to ${sharedTripTarget.headsign}` : '';
+    sharedTripBannerText.textContent =
+      `\u{1F44B} Shared trip: Route ${sharedTripTarget.route}${destination} at ${sharedTripTarget.scheduled_time}`;
+    sharedTripBanner.classList.remove('hidden');
+
+    // Stop name will be corrected automatically once the board loads
+    // (renderBoard reads stop_name/direction from the API response)
+    selectStop(sharedStopId, sharedStopId, null);
+
+    // Clean the URL so a page refresh later doesn't keep re-showing the
+    // banner for a trip that may have already passed
+    window.history.replaceState({}, '', window.location.pathname);
+  } else if (currentStopId && currentStopName) {
     selectStop(currentStopId, currentStopName);
   }
 
@@ -1306,6 +1484,81 @@
     } finally {
       feedbackSubmit.disabled = false;
       feedbackSubmit.textContent = 'Send';
+    }
+  });
+  // --- Share this app -----------------------------------------------------
+  const shareBtn = document.getElementById('shareBtn');
+  const sharePanel = document.getElementById('sharePanel');
+  const shareWhatsApp = document.getElementById('shareWhatsApp');
+  const shareCopyLink = document.getElementById('shareCopyLink');
+  const shareCancel = document.getElementById('shareCancel');
+  const shareStatus = document.getElementById('shareStatus');
+
+  function getShareContent() {
+    const url = window.location.origin + '/';
+    const text = currentStopName
+      ? `I've been using this to check live bus times at ${currentStopName} - handy if you're nearby too:`
+      : 'Live bus and train times for any stop in Ireland - worth a look if you take public transport:';
+    return { url, text, title: 'Live Departures' };
+  }
+
+  // Builds a deep link to one exact departure (stop + route + destination +
+  // scheduled time) so whoever opens it sees that specific bus highlighted,
+  // not just the app's home screen.
+  function getTripShareContent(route, headsign, scheduledTime, dueMinutes) {
+    const params = new URLSearchParams({
+      stop: currentStopId,
+      route: route,
+      headsign: headsign || '',
+      sched: scheduledTime,
+    });
+    const url = `${window.location.origin}/?${params.toString()}`;
+    const destination = headsign ? ` to ${headsign}` : '';
+    const text = `Want to join me? I'm catching the ${route}${destination} from ${currentStopName}, leaving at ${scheduledTime} (in about ${dueMinutes} min). Here's the live bus:`;
+    return { url, text, title: `Route ${route}${destination}` };
+  }
+
+  async function shareContent({ url, text, title }) {
+    if (navigator.share) {
+      try {
+        await navigator.share({ title, text, url });
+      } catch (e) {
+        // User cancelled the share sheet - nothing to do
+      }
+      return;
+    }
+
+    // Desktop fallback: a small panel with direct options
+    shareWhatsApp.href = `https://wa.me/?text=${encodeURIComponent(text + ' ' + url)}`;
+    shareCopyLink.dataset.url = url;
+    shareStatus.classList.add('hidden');
+    sharePanel.classList.remove('hidden');
+  }
+
+  shareBtn.addEventListener('click', () => shareContent(getShareContent()));
+
+  function shareTripDeparture(route, headsign, scheduledTime, dueMinutes) {
+    shareContent(getTripShareContent(route, headsign, scheduledTime, dueMinutes));
+  }
+
+  shareCancel.addEventListener('click', () => {
+    sharePanel.classList.add('hidden');
+  });
+
+  sharePanel.addEventListener('click', (e) => {
+    if (e.target === sharePanel) sharePanel.classList.add('hidden');
+  });
+
+  shareCopyLink.addEventListener('click', async () => {
+    const url = shareCopyLink.dataset.url || getShareContent().url;
+    try {
+      await navigator.clipboard.writeText(url);
+      shareStatus.textContent = 'Link copied!';
+      shareStatus.classList.remove('hidden');
+    } catch (e) {
+      shareStatus.textContent = 'Could not copy - copy the address bar URL instead.';
+      shareStatus.style.color = 'var(--red)';
+      shareStatus.classList.remove('hidden');
     }
   });
 </script>
