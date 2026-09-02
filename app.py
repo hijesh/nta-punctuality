@@ -117,6 +117,8 @@ def api_departures(stop_id):
     board["stop_name"] = stop_info["stop_name"] if stop_info else stop_id
     board["stop_direction"] = stop_info["direction"] if stop_info else None
     board["stop_code"] = stop_info["stop_code"] if stop_info else None
+    board["stop_lat"] = stop_info["lat"] if stop_info else None
+    board["stop_lon"] = stop_info["lon"] if stop_info else None
 
     maybe_log_stop_view(stop_id, board["stop_name"])
 

@@ -286,6 +286,31 @@
     color: var(--green);
   }
 
+  #alertSetBanner {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    background: rgba(255, 176, 32, 0.1);
+    border: 1px solid var(--amber);
+    border-radius: 10px;
+    padding: 0.75rem 0.9rem;
+    margin-bottom: 0.9rem;
+    font-size: 0.85rem;
+    color: var(--amber);
+  }
+  #alertSetDirectionsBtn {
+    background: var(--amber);
+    color: var(--on-amber);
+    text-decoration: none;
+    padding: 0.4rem 0.75rem;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
   #alertFilterRow {
     display: none;
   }
@@ -694,6 +719,11 @@
     <strong style="color: var(--red);">Cancelled</strong> - this service has been cancelled or is skipping this stop.
   </div>
 
+  <div id="alertSetBanner" class="hidden">
+    <span id="alertSetBannerText"></span>
+    <a id="alertSetDirectionsBtn" href="#" target="_blank" rel="noopener">&#128506; Walking directions</a>
+  </div>
+
   <div id="loadingState" class="hidden">Loading departures...</div>
   <div id="emptyState" class="hidden">Search for a stop above to see live departures.</div>
 
@@ -889,6 +919,40 @@
     updateFavouriteToggle();
     renderFavourites();
     renderBoardFromCache();
+    renderAlertSetBanner();
+  }
+
+  // --- Alert-set banner with a one-tap walking-directions link -----------
+  const alertSetBanner = document.getElementById('alertSetBanner');
+  const alertSetBannerText = document.getElementById('alertSetBannerText');
+  const alertSetDirectionsBtn = document.getElementById('alertSetDirectionsBtn');
+  let currentStopLat = null;
+  let currentStopLon = null;
+
+  function renderAlertSetBanner() {
+    const fav = getCurrentFavourite();
+
+    if (!fav || !fav.route) {
+      alertSetBanner.classList.add('hidden');
+      return;
+    }
+
+    const destination = fav.headsign ? ` to ${fav.headsign}` : '';
+    alertSetBannerText.textContent =
+      `\u{1F514} Alert set: Route ${fav.route}${destination} at ${fav.scheduled_time}`;
+
+    if (currentStopLat !== null && currentStopLon !== null) {
+      alertSetDirectionsBtn.href =
+        `https://www.google.com/maps/dir/?api=1&destination=${currentStopLat},${currentStopLon}&travelmode=walking`;
+      alertSetDirectionsBtn.classList.remove('hidden');
+    } else {
+      // Stop coordinates haven't loaded yet (shouldn't normally happen,
+      // since the board response always includes them) - hide the link
+      // rather than send someone to a broken Maps URL
+      alertSetDirectionsBtn.classList.add('hidden');
+    }
+
+    alertSetBanner.classList.remove('hidden');
   }
 
   function renderBoardFromCache() {
@@ -1195,6 +1259,8 @@
     currentStopName = stopName;
     currentStopDirection = direction || null;
     currentStopCode = null;
+    currentStopLat = null;
+    currentStopLon = null;
     localStorage.setItem('lastStopId', stopId);
     localStorage.setItem('lastStopName', stopName);
 
@@ -1206,6 +1272,7 @@
 
     updateFavouriteToggle();
     renderFavourites();
+    renderAlertSetBanner();
 
     loadBoard();
     if (refreshTimer) clearInterval(refreshTimer);
@@ -1256,10 +1323,15 @@
       currentStopCode = data.stop_code;
       stopHeaderChanged = true;
     }
+    if (data.stop_lat != null && data.stop_lon != null) {
+      currentStopLat = data.stop_lat;
+      currentStopLon = data.stop_lon;
+    }
     if (stopHeaderChanged) {
       updateStopNameLabel();
       renderFavourites(); // chips may need their direction filled in too
     }
+    renderAlertSetBanner();
 
     if (upcoming.length === 0) {
       board.innerHTML = '<div id="emptyState">No departures in the next 90 minutes.</div>';
