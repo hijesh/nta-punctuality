@@ -3,11 +3,11 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>DueIn - Ireland bus & rail times</title>
+<title>ÉireRoute - Ireland bus & rail times</title>
 <meta name="description" content="Live, real-time bus and train departures for any stop in Ireland - cancellations, walking directions, and leave-now alerts, powered by NTA open data." />
 
 <!-- Social share previews (Facebook, WhatsApp, Slack, etc.) -->
-<meta property="og:title" content="DueIn - Ireland bus & rail times" />
+<meta property="og:title" content="ÉireRoute - Ireland bus & rail times" />
 <meta property="og:description" content="Real-time bus and train departures for any stop in Ireland, with cancellations and leave-now alerts." />
 <meta property="og:type" content="website" />
 <meta property="og:url" content="https://REPLACE-WITH-YOUR-RENDER-URL.onrender.com/" />
@@ -666,7 +666,7 @@
     <p class="eyebrow">Ireland &middot; Live &middot; GTFS-Realtime</p>
     <button id="themeToggle" title="Switch theme">&#9789;</button>
   </div>
-  <h1>DueIn</h1>
+  <h1>ÉireRoute</h1>
   <div class="search-wrap">
     <input id="stopSearch" type="text" placeholder="Search by stop name or number, e.g. Letterbreen or 234561" autocomplete="off" />
     <div id="searchResults" class="hidden"></div>
@@ -1511,7 +1511,7 @@
     const text = currentStopName
       ? `I've been using this to check live bus times at ${currentStopName} - handy if you're nearby too:`
       : 'Live bus and train times for any stop in Ireland - worth a look if you take public transport:';
-    return { url, text, title: 'DueIn' };
+    return { url, text, title: 'ÉireRoute' };
   }
 
   // Builds a deep link to one exact departure (stop + route + destination +

@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "DueIn - Ireland bus & rail times",
-  "short_name": "DueIn",
+  "name": "ÉireRoute - Ireland bus & rail times",
+  "short_name": "ÉireRoute",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0b1220",
