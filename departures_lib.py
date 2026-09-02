@@ -101,8 +101,8 @@ def get_nearby_stops(conn, lat: float, lon: float, limit: int = 8, radius_km: fl
         f"""
         SELECT {columns}
         FROM stops
-        WHERE stop_lat BETWEEN ? AND ?
-          AND stop_lon BETWEEN ? AND ?
+        WHERE CAST(stop_lat AS REAL) BETWEEN ? AND ?
+          AND CAST(stop_lon AS REAL) BETWEEN ? AND ?
         """,
         (lat - lat_delta, lat + lat_delta, lon - lon_delta, lon + lon_delta),
     ).fetchall()
