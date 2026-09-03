@@ -822,8 +822,11 @@
     liveInfoPanel.classList.toggle('hidden');
   });
 
-  let currentStopId = localStorage.getItem('lastStopId');
-  let currentStopName = localStorage.getItem('lastStopName');
+  // Deliberately NOT reading the last stop from localStorage here - the app
+  // should start with a genuinely clean slate every time it opens, not
+  // carry over stale state from a previous session.
+  let currentStopId = null;
+  let currentStopName = null;
   let refreshTimer = null;
   let searchDebounce = null;
 
@@ -1305,9 +1308,36 @@
     }
   }
 
+  // Once a targeted trip's scheduled time passes, the backend stops
+  // returning it in "upcoming" entirely (it's already departed). That's
+  // our signal to auto-clear the alert - otherwise the bell would stay
+  // lit and the banner would keep showing a bus that already left.
+  function pruneExpiredAlertTarget(upcoming) {
+    if (!currentStopId) return false;
+    const favs = getFavourites();
+    const fav = favs.find(f => f.stop_id === currentStopId);
+    if (!fav || !fav.route) return false;
+
+    const stillPresent = upcoming.some(d =>
+      d.route === fav.route &&
+      (fav.headsign || '') === (d.headsign || '') &&
+      fav.scheduled_time === d.scheduled_time
+    );
+
+    if (stillPresent) return false;
+
+    fav.route = null;
+    fav.headsign = null;
+    fav.scheduled_time = null;
+    saveFavourites(favs);
+    return true;
+  }
+
   function renderBoard(data) {
     const upcoming = data.upcoming || [];
     lastBoardUpcoming = upcoming;
+
+    const alertWasCleared = pruneExpiredAlertTarget(upcoming);
 
     let stopHeaderChanged = false;
     if (data.stop_name && data.stop_name !== currentStopName) {
@@ -1327,9 +1357,9 @@
       currentStopLat = data.stop_lat;
       currentStopLon = data.stop_lon;
     }
-    if (stopHeaderChanged) {
+    if (stopHeaderChanged || alertWasCleared) {
       updateStopNameLabel();
-      renderFavourites(); // chips may need their direction filled in too
+      renderFavourites(); // chips may need their direction/route target updated too
     }
     renderAlertSetBanner();
 
@@ -1463,7 +1493,10 @@
   const urlParams = new URLSearchParams(window.location.search);
   const sharedStopId = urlParams.get('stop');
 
-  // --- Restore last-viewed stop on load, or load a shared trip instead ---
+  // --- Show a clean home screen on open, or load a shared trip instead ---
+  // We deliberately do NOT auto-restore the last-viewed stop here - opening
+  // the app should always show the search box, "stops near me", and
+  // favourites, not silently jump back into whatever was open last time.
   renderFavourites();
 
   if (sharedStopId) {
@@ -1485,8 +1518,6 @@
     // Clean the URL so a page refresh later doesn't keep re-showing the
     // banner for a trip that may have already passed
     window.history.replaceState({}, '', window.location.pathname);
-  } else if (currentStopId && currentStopName) {
-    selectStop(currentStopId, currentStopName);
   }
 
   // --- PWA install prompt -------------------------------------------------
