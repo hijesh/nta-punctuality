@@ -21,7 +21,19 @@ from google.transit import gtfs_realtime_pb2
 IE_TZ = ZoneInfo("Europe/Dublin")
 
 TRIP_UPDATES_URL = "https://api.nationaltransport.ie/gtfsr/v2/TripUpdates"
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "punctuality.sqlite3")
+
+# DATA_DIR is where the schedule database, punctuality log, and analytics
+# database all live. On Render, set the DATA_DIR environment variable to
+# "/data" (the mount path of a persistent disk) so this survives deploys
+# and restarts - without that env var, it defaults to a local "data"
+# folder next to the code, which is fine for local development but gets
+# wiped on every deploy on Render's default ephemeral filesystem.
+DATA_DIR = os.environ.get("DATA_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data"
+)
+os.makedirs(DATA_DIR, exist_ok=True)
+
+DB_PATH = os.path.join(DATA_DIR, "punctuality.sqlite3")
 
 WEEKDAY_COLUMNS = ["monday", "tuesday", "wednesday", "thursday",
                    "friday", "saturday", "sunday"]
@@ -216,7 +228,7 @@ def classify_operator(route_type, agency_name, route_short_name, route_long_name
 # Kept in a SEPARATE database file from the schedule data, because
 # setup_static_data.py wipes and rebuilds punctuality.sqlite3 on every
 # deploy - we don't want that to erase your usage history too.
-ANALYTICS_DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "analytics.sqlite3")
+ANALYTICS_DB_PATH = os.path.join(DATA_DIR, "analytics.sqlite3")
 
 
 def get_analytics_connection():

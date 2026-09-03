@@ -22,9 +22,12 @@ import io
 import requests
 import pandas as pd
 
+# Reuses the exact same DATA_DIR/DB_PATH as the rest of the app (departures_lib.py),
+# so this script and the running server always agree on where the database
+# lives - whether that's the local "data" folder or a mounted Render disk.
+from departures_lib import DATA_DIR, DB_PATH
+
 STATIC_GTFS_URL = "https://www.transportforireland.ie/transitData/Data/GTFS_Realtime.zip"
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-DB_PATH = os.path.join(DATA_DIR, "punctuality.sqlite3")
 
 # The GTFS spec defines these standard files inside the zip. calendar.txt
 # and calendar_dates.txt tell us which trips run on which days (weekday vs
