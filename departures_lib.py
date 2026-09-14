@@ -63,7 +63,16 @@ def get_cached_live_delays(api_key: str):
 
 
 def get_connection():
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    # WAL mode lets reads happen concurrently with a write instead of
+    # locking each other out - important now that a background thread
+    # (the punctuality poller) holds a connection open long-term while
+    # web requests are also reading the same file. busy_timeout makes any
+    # remaining brief contention wait a moment and retry instead of
+    # immediately raising "database is locked".
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    return conn
 
 
 _stops_columns_cache = None
@@ -232,7 +241,9 @@ ANALYTICS_DB_PATH = os.path.join(DATA_DIR, "analytics.sqlite3")
 
 
 def get_analytics_connection():
-    conn = sqlite3.connect(ANALYTICS_DB_PATH)
+    conn = sqlite3.connect(ANALYTICS_DB_PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS app_events (
@@ -311,6 +322,138 @@ def log_event(event_type, stop_id=None, stop_name=None, visitor_id=None):
         conn.commit()
     finally:
         conn.close()
+
+
+# --- Punctuality history logging ------------------------------------------
+# Shared by run_poller.py (standalone script, for local testing) and the
+# background thread started inside app.py (for actually running continuously
+# on Render). Keeping this logic in one place means both call identical,
+# tested code rather than two copies that could quietly drift apart.
+#
+# IMPORTANT: this log lives in its OWN database file (like analytics.sqlite3),
+# separate from the schedule database (DB_PATH). setup_static_data.py wipes
+# and rebuilds the schedule database on every deploy - if punctuality_log
+# lived there too, every deploy would silently erase all accumulated
+# punctuality history. Route/stop lookups below still read from the
+# (refreshable) schedule database, since we always want current names -
+# only the actual historical log rows live in this separate, never-wiped file.
+
+PUNCTUALITY_LOG_DB_PATH = os.path.join(DATA_DIR, "punctuality_log.sqlite3")
+
+
+def get_punctuality_log_connection():
+    conn = sqlite3.connect(PUNCTUALITY_LOG_DB_PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS punctuality_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            polled_at TEXT NOT NULL,
+            service_date TEXT NOT NULL,
+            trip_id TEXT NOT NULL,
+            route_id TEXT,
+            route_name TEXT,
+            stop_id TEXT,
+            stop_name TEXT,
+            scheduled_time TEXT,
+            delay_seconds INTEGER
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_log_route_date "
+        "ON punctuality_log(route_id, service_date)"
+    )
+    conn.commit()
+    return conn
+
+
+def _lookup_route_name_for_log(conn, route_id):
+    row = conn.execute(
+        "SELECT route_short_name, route_long_name FROM routes WHERE route_id = ?",
+        (route_id,),
+    ).fetchone()
+    if not row:
+        return route_id
+    short_name, long_name = row
+    return short_name or long_name or route_id
+
+
+def _lookup_stop_name_for_log(conn, stop_id):
+    row = conn.execute(
+        "SELECT stop_name FROM stops WHERE stop_id = ?", (stop_id,)
+    ).fetchone()
+    return row[0] if row else stop_id
+
+
+def _lookup_scheduled_time_for_log(conn, trip_id, stop_id):
+    row = conn.execute(
+        "SELECT arrival_time FROM stop_times WHERE trip_id = ? AND stop_id = ?",
+        (trip_id, stop_id),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def poll_and_log_punctuality(schedule_conn, api_key):
+    """Does one fetch-decode-join-store cycle against the live feed,
+    logging every stop/delay observation to punctuality_log. Route/stop
+    names are looked up from schedule_conn (the regular, refreshable
+    schedule database), but the actual log rows are written to the
+    separate, never-wiped punctuality log database. Returns how many rows
+    were logged. Raises requests.exceptions.RequestException on network
+    failure - callers should catch this and keep going."""
+    response = requests.get(TRIP_UPDATES_URL, headers={"x-api-key": api_key}, timeout=15)
+    response.raise_for_status()
+
+    feed = gtfs_realtime_pb2.FeedMessage()
+    feed.ParseFromString(response.content)
+
+    polled_at = datetime.now(IE_TZ).isoformat(timespec="seconds")
+    service_date = datetime.now(IE_TZ).date().isoformat()
+
+    rows_logged = 0
+    log_conn = get_punctuality_log_connection()
+    try:
+        cur = log_conn.cursor()
+
+        for entity in feed.entity:
+            trip_update = entity.trip_update
+            trip_id = trip_update.trip.trip_id
+            route_id = trip_update.trip.route_id
+            route_name = _lookup_route_name_for_log(schedule_conn, route_id)
+
+            for stop_time_update in trip_update.stop_time_update:
+                stop_id = stop_time_update.stop_id
+                stop_name = _lookup_stop_name_for_log(schedule_conn, stop_id)
+                scheduled_time = _lookup_scheduled_time_for_log(schedule_conn, trip_id, stop_id)
+
+                if stop_time_update.HasField("arrival"):
+                    delay_seconds = stop_time_update.arrival.delay
+                elif stop_time_update.HasField("departure"):
+                    delay_seconds = stop_time_update.departure.delay
+                else:
+                    delay_seconds = None
+
+                cur.execute(
+                    """
+                    INSERT INTO punctuality_log
+                        (polled_at, service_date, trip_id, route_id, route_name,
+                         stop_id, stop_name, scheduled_time, delay_seconds)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        polled_at, service_date, trip_id, route_id, route_name,
+                        stop_id, stop_name, scheduled_time, delay_seconds,
+                    ),
+                )
+                rows_logged += 1
+
+        log_conn.commit()
+    finally:
+        log_conn.close()
+
+    return rows_logged
 
 
 def get_stats_summary():

@@ -13,7 +13,8 @@ import os
 import sqlite3
 import sys
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "punctuality.sqlite3")
+import departures_lib as lib
+DB_PATH = lib.PUNCTUALITY_LOG_DB_PATH
 
 # A trip counts as "on time" if it's within this many minutes either side
 # of its scheduled time. 5 minutes is a common industry standard for buses.

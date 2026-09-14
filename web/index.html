@@ -916,6 +916,13 @@
       fav.route = route;
       fav.headsign = headsign || null;
       fav.scheduled_time = scheduledTime;
+
+      // A fresh, explicit bell-tap always re-arms notification eligibility
+      // for this trip today - even if it already fired once earlier (e.g.
+      // the user missed it, or is just re-confirming interest).
+      const todayKey = new Date().toDateString();
+      const freshTripKey = `${currentStopId}|${route}|${headsign || ''}|${scheduledTime}|${todayKey}`;
+      notifiedTrips.delete(freshTripKey);
     }
 
     saveFavourites(favs);
@@ -1095,7 +1102,12 @@
         if (walkMin === undefined) continue;
 
         const leaveIn = next.due_in_minutes - walkMin;
-        const tripKey = `${fav.stop_id}|${next.scheduled_time}`;
+        // Scoped to today's date, not just stop+time - otherwise a daily
+        // recurring departure (same route, same scheduled time every day)
+        // would only ever notify once, ever, since this Set never clears
+        // on its own for as long as the app/tab stays open across days.
+        const todayKey = new Date().toDateString();
+        const tripKey = `${fav.stop_id}|${next.route}|${next.headsign || ''}|${next.scheduled_time}|${todayKey}`;
 
         if (leaveIn <= 0 && !notifiedTrips.has(tripKey)) {
           notifiedTrips.add(tripKey);

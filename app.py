@@ -21,6 +21,7 @@ Then open http://localhost:5000 in a browser on the same computer.
 import functools
 import html
 import os
+import threading
 import time
 import uuid
 
@@ -342,9 +343,70 @@ def stats_page():
     return Response(page_html, mimetype="text/html")
 
 
+# --- Background punctuality poller ----------------------------------------
+# Runs inside this same web service (not a separate Render service), since
+# Render disks can only attach to one service at a time - this way the
+# poller and the web app share the same disk/database automatically,
+# because they're literally the same process.
+PUNCTUALITY_POLL_INTERVAL_SECONDS = 65
+_poller_thread_started = False
+
+
+def punctuality_poller_loop():
+    if not API_KEY:
+        print("Punctuality poller: no NTA_API_KEY set, skipping.")
+        return
+
+    print("Punctuality poller thread started - polling every",
+          PUNCTUALITY_POLL_INTERVAL_SECONDS, "seconds.")
+
+    while True:
+        start = time.time()
+        try:
+            # A fresh connection each cycle, opened and closed immediately -
+            # same pattern every web request already uses. Holding one
+            # connection open for the thread's entire lifetime (as this used
+            # to do) contributed to "database is locked" errors against
+            # concurrent web requests.
+            conn = lib.get_connection()
+            try:
+                lib.poll_and_log_punctuality(conn, API_KEY)
+            finally:
+                conn.close()
+        except Exception as e:
+            # Never let a bad poll kill this background thread - log and
+            # keep going, same as the standalone script does.
+            print(f"Punctuality poller: poll failed ({e}). Will retry next cycle.")
+
+        elapsed = time.time() - start
+        time.sleep(max(0, PUNCTUALITY_POLL_INTERVAL_SECONDS - elapsed))
+
+
+def start_punctuality_poller_once():
+    """Starts the background poller thread exactly once per process."""
+    global _poller_thread_started
+    if _poller_thread_started:
+        return
+    _poller_thread_started = True
+    thread = threading.Thread(target=punctuality_poller_loop, daemon=True)
+    thread.start()
+
+
+# Started at import time (not inside `if __name__ == "__main__"`), since
+# gunicorn imports this module directly in production and never runs that
+# block below - this line is what actually makes it start on Render.
+if os.path.exists(lib.DB_PATH):
+    start_punctuality_poller_once()
+
+
 if __name__ == "__main__":
     if not os.path.exists(lib.DB_PATH):
         print("ERROR: No database found. Run setup_static_data.py first.")
     else:
         print("Starting server. Open http://localhost:5000 in your browser.")
-        app.run(host="0.0.0.0", port=5000, debug=True)
+        # use_reloader=False: the reloader re-imports this whole file in a
+        # second process, which would start a second poller thread. Since
+        # we've been restarting the server manually after backend changes
+        # throughout this project anyway, disabling it here is the simplest
+        # way to avoid that duplicate-thread edge case entirely.
+        app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)

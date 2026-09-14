@@ -27,7 +27,7 @@ import pandas as pd
 # lives - whether that's the local "data" folder or a mounted Render disk.
 from departures_lib import DATA_DIR, DB_PATH
 
-STATIC_GTFS_URL = "https://www.transportforireland.ie/transitData/Data/GTFS_Realtime.zip"
+STATIC_GTFS_URL = "https://www.transportforireland.ie/transitData/Data/GTFS_All.zip"
 
 # The GTFS spec defines these standard files inside the zip. calendar.txt
 # and calendar_dates.txt tell us which trips run on which days (weekday vs
