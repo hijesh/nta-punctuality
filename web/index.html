@@ -373,6 +373,15 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* Without this, a grid item's minimum width defaults to its content's
+     natural size - meaning a long, unbroken destination name would force
+     this column wider than its assigned space, pushing the bell/share
+     icons off the visible edge on mobile. This lets it shrink properly
+     so the overflow/ellipsis rule above can actually take effect. */
+  .row > div:nth-child(2) {
+    min-width: 0;
+    overflow: hidden;
+  }
   .row .sched {
     font-size: 0.7rem;
     color: var(--text-dim);
