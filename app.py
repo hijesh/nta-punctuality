@@ -50,6 +50,22 @@ _recent_stop_views = {}
 _STOP_VIEW_DEDUPE_SECONDS = 5 * 60
 
 
+# Guards every /api/ route from running before the schedule database has
+# actually been built. Without this, a request arriving mid-startup (or
+# mid-refresh) would call sqlite3.connect() on a path that doesn't exist
+# yet - which SQLite silently "handles" by creating an empty file with no
+# tables, causing confusing "no such table" crashes instead of a clean
+# message. The homepage/static files/manifest are still served normally,
+# since there's no reason to block those.
+@app.before_request
+def block_api_until_schedule_ready():
+    if request.path.startswith("/api/") and not os.path.exists(lib.DB_PATH):
+        return jsonify({
+            "error": "Server is still starting up (downloading schedule data). "
+                     "Please try again in a minute."
+        }), 503
+
+
 def get_or_create_visitor_id():
     visitor_id = request.cookies.get(VISITOR_COOKIE_NAME)
     is_new = visitor_id is None
@@ -457,28 +473,52 @@ def start_static_data_refresher_once():
     thread.start()
 
 
+# --- Startup sequencing ----------------------------------------------------
+# The initial schedule download must NOT block gunicorn's worker boot - a
+# large nationwide GTFS file can take longer than gunicorn's default
+# 30-second worker timeout, which was silently killing and restarting the
+# worker mid-download in a loop. Instead: the worker starts accepting
+# connections immediately (the before_request guard above returns a clean
+# 503 for API calls until the data is ready), while this thread does the
+# actual download in the background. Once it succeeds, it starts the
+# poller and refresher threads - they'd have nothing to do until the
+# schedule database exists anyway.
+def initial_startup_loop():
+    ensure_static_data_ready()
+    if os.path.exists(lib.DB_PATH):
+        start_punctuality_poller_once()
+        start_static_data_refresher_once()
+    else:
+        print("Startup: schedule database still isn't ready after the initial "
+              "attempt - API routes will keep returning 503 until a future "
+              "refresh attempt succeeds.")
+
+
+_initial_startup_thread_started = False
+
+
+def start_initial_startup_once():
+    global _initial_startup_thread_started
+    if _initial_startup_thread_started:
+        return
+    _initial_startup_thread_started = True
+    thread = threading.Thread(target=initial_startup_loop, daemon=True)
+    thread.start()
+
+
 # Runs at import time (not inside `if __name__ == "__main__"`), since
 # gunicorn imports this module directly in production - this is what
-# actually builds the schedule database on Render, now that it no longer
-# happens during the build step.
-ensure_static_data_ready()
-
-# Started at import time (not inside `if __name__ == "__main__"`), since
-# gunicorn imports this module directly in production and never runs that
-# block below - this line is what actually makes it start on Render.
-if os.path.exists(lib.DB_PATH):
-    start_punctuality_poller_once()
-    start_static_data_refresher_once()
+# actually builds the schedule database on Render, now running in the
+# background instead of blocking the worker from starting.
+start_initial_startup_once()
 
 
 if __name__ == "__main__":
-    if not os.path.exists(lib.DB_PATH):
-        print("ERROR: Could not set up the schedule database. Check the errors above.")
-    else:
-        print("Starting server. Open http://localhost:5000 in your browser.")
-        # use_reloader=False: the reloader re-imports this whole file in a
-        # second process, which would start a second poller thread. Since
-        # we've been restarting the server manually after backend changes
-        # throughout this project anyway, disabling it here is the simplest
-        # way to avoid that duplicate-thread edge case entirely.
-        app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+    print("Starting server. Open http://localhost:5000 in your browser once "
+          "the schedule database finishes downloading (watch the logs above).")
+    # use_reloader=False: the reloader re-imports this whole file in a
+    # second process, which would start a second poller thread. Since
+    # we've been restarting the server manually after backend changes
+    # throughout this project anyway, disabling it here is the simplest
+    # way to avoid that duplicate-thread edge case entirely.
+    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
