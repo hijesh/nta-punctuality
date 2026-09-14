@@ -55,11 +55,38 @@ _STOP_VIEW_DEDUPE_SECONDS = 5 * 60
 # mid-refresh) would call sqlite3.connect() on a path that doesn't exist
 # yet - which SQLite silently "handles" by creating an empty file with no
 # tables, causing confusing "no such table" crashes instead of a clean
+import sqlite3
+
+
+def is_schedule_db_valid():
+    """Checks the schedule database actually has real data in it, not just
+    that a file happens to exist at that path. A plain existence check
+    isn't enough - SQLite silently creates an empty file the moment
+    anything connects to a path that doesn't exist yet, and a previous
+    failed/interrupted attempt can also leave a stale, empty, or corrupt
+    file sitting on the persistent disk. This catches both cases by
+    actually querying for real rows, not just checking the file is there."""
+    if not os.path.exists(lib.DB_PATH):
+        return False
+    try:
+        conn = sqlite3.connect(lib.DB_PATH, timeout=5)
+        count = conn.execute("SELECT COUNT(*) FROM stops").fetchone()[0]
+        conn.close()
+        return count > 0
+    except Exception:
+        return False
+
+
+# Guards every /api/ route from running before the schedule database has
+# actually been built. Without this, a request arriving mid-startup (or
+# mid-refresh) would call sqlite3.connect() on a path that doesn't exist
+# yet - which SQLite silently "handles" by creating an empty file with no
+# tables, causing confusing "no such table" crashes instead of a clean
 # message. The homepage/static files/manifest are still served normally,
 # since there's no reason to block those.
 @app.before_request
 def block_api_until_schedule_ready():
-    if request.path.startswith("/api/") and not os.path.exists(lib.DB_PATH):
+    if request.path.startswith("/api/") and not is_schedule_db_valid():
         return jsonify({
             "error": "Server is still starting up (downloading schedule data). "
                      "Please try again in a minute."
@@ -428,13 +455,13 @@ _static_data_refresher_started = False
 
 
 def ensure_static_data_ready():
-    """Downloads/rebuilds the schedule database if it's missing or older
-    than STATIC_DATA_MAX_AGE_SECONDS. Safe to call repeatedly - it's a
-    cheap check (just a file timestamp) unless an actual refresh is due."""
+    """Downloads/rebuilds the schedule database if it's missing, invalid
+    (empty/corrupt - e.g. a leftover stub from an interrupted previous
+    attempt), or older than STATIC_DATA_MAX_AGE_SECONDS."""
     needs_refresh = False
 
-    if not os.path.exists(lib.DB_PATH):
-        print("No schedule database found - downloading for the first time...")
+    if not is_schedule_db_valid():
+        print("No valid schedule database found - downloading...")
         needs_refresh = True
     else:
         age_seconds = time.time() - os.path.getmtime(lib.DB_PATH)
@@ -485,7 +512,7 @@ def start_static_data_refresher_once():
 # schedule database exists anyway.
 def initial_startup_loop():
     ensure_static_data_ready()
-    if os.path.exists(lib.DB_PATH):
+    if is_schedule_db_valid():
         start_punctuality_poller_once()
         start_static_data_refresher_once()
     else:
