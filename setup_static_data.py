@@ -51,6 +51,16 @@ def download_static_gtfs() -> bytes:
     return response.content
 
 
+# Rows processed at a time when loading each CSV into SQLite. Reading a
+# whole file into one pandas DataFrame at once was fine for the smaller
+# GTFS_Realtime.zip, but GTFS_All.zip's nationwide stop_times.txt has far
+# more rows - loading it all in one go pushed memory past the server's
+# 512MB limit and got the process killed (with no Python traceback, since
+# it's an external kill, not a catchable exception). Processing in bounded
+# chunks keeps peak memory usage roughly constant regardless of file size.
+CHUNK_SIZE = 50_000
+
+
 def load_into_sqlite(zip_bytes: bytes):
     os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -74,15 +84,24 @@ def load_into_sqlite(zip_bytes: bytes):
                 print(f"WARNING: {filename} not found in the zip - skipping.")
                 continue
 
-            print(f"Loading {filename} ...")
-            with z.open(filename) as f:
-                df = pd.read_csv(f, dtype=str)  # keep everything as text -
-                                                 # IDs and times shouldn't be
-                                                 # treated as numbers
-
             table_name = filename.replace(".txt", "")
-            df.to_sql(table_name, conn, if_exists="replace", index=False)
-            print(f"  -> {len(df):,} rows loaded into table '{table_name}'")
+            print(f"Loading {filename} ...")
+
+            total_rows = 0
+            with z.open(filename) as f:
+                # dtype=str keeps everything as text - IDs and times
+                # shouldn't be treated as numbers. chunksize means pandas
+                # hands us one manageable slice at a time instead of
+                # parsing the entire file into memory up front.
+                for i, chunk in enumerate(pd.read_csv(f, dtype=str, chunksize=CHUNK_SIZE)):
+                    chunk.to_sql(
+                        table_name, conn,
+                        if_exists="replace" if i == 0 else "append",
+                        index=False,
+                    )
+                    total_rows += len(chunk)
+
+            print(f"  -> {total_rows:,} rows loaded into table '{table_name}'")
 
     # Indexes make our later lookups (by trip_id, stop_id) fast instead of
     # scanning the whole table every time
