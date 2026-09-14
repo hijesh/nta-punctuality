@@ -1,17 +1,19 @@
 """
-Step 2: Download the static GTFS schedule and load it into a local
-SQLite database (a single file, no server needed).
+Downloads the static GTFS schedule and loads it into a local SQLite
+database (a single file, no server needed).
 
 The static feed contains the timetable: which trips exist, which stops
 they visit, at what scheduled time, and what routes they belong to.
 The realtime feed only gives IDs and delays - this is what turns those
 IDs into human-readable names and schedules.
 
-Run it with:
-    python setup_static_data.py
+IMPORTANT: this is no longer run as part of Render's build step. Render's
+persistent disks aren't accessible during build (it runs on separate,
+temporary compute) - only at runtime. app.py now calls the functions in
+this file automatically at startup instead, when the disk is actually
+available. This file can still be run manually/locally for testing:
 
-Re-run it any time you want to refresh the schedule (e.g. weekly) -
-it will re-download and rebuild the database from scratch.
+    python setup_static_data.py
 """
 
 import os
@@ -52,11 +54,17 @@ def download_static_gtfs() -> bytes:
 def load_into_sqlite(zip_bytes: bytes):
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    # Wipe any previous database so we always start fresh
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
+    # Build into a temporary file, then atomically swap it into place at
+    # the very end. This matters now that this can run while the app is
+    # live serving requests (periodic refresh) - a half-built or briefly
+    # deleted database file would otherwise risk breaking requests that
+    # happen mid-rebuild. os.replace() is atomic on the filesystems Render
+    # (and normal Linux/Mac/Windows) use.
+    temp_path = DB_PATH + ".tmp"
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(temp_path)
 
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
         available = z.namelist()
@@ -85,6 +93,8 @@ def load_into_sqlite(zip_bytes: bytes):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_stops_stop ON stops(stop_id)")
     conn.commit()
     conn.close()
+
+    os.replace(temp_path, DB_PATH)
 
     print()
     print(f"Done. Static schedule database ready at:\n  {DB_PATH}")

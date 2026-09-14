@@ -30,6 +30,7 @@ from flask import Flask, jsonify, request, send_from_directory, make_response, R
 
 import departures_lib as lib
 import ors_lib
+import setup_static_data
 
 load_dotenv()
 
@@ -392,16 +393,87 @@ def start_punctuality_poller_once():
     thread.start()
 
 
+# --- Static schedule data: download + periodic refresh --------------------
+# IMPORTANT: this used to run as part of Render's BUILD command
+# ("python setup_static_data.py"), which is why deploys started failing
+# once a persistent disk was attached - Render disks are only accessible
+# at RUNTIME, never during the build step (build runs on separate,
+# temporary compute with no access to the disk at all). So this now runs
+# here instead, at actual server startup, when the disk is really mounted.
+#
+# Since the disk now persists the schedule database across restarts, it
+# also needs to be refreshed periodically on its own - previously, every
+# deploy naturally re-downloaded it (ephemeral storage wiped it each
+# time), which incidentally kept it fresh. That free refresh is gone now
+# that persistence is the whole point, so this thread replaces it.
+STATIC_DATA_MAX_AGE_SECONDS = 24 * 60 * 60  # refresh at most once a day
+STATIC_DATA_CHECK_INTERVAL_SECONDS = 6 * 60 * 60  # but check every 6h
+_static_data_refresher_started = False
+
+
+def ensure_static_data_ready():
+    """Downloads/rebuilds the schedule database if it's missing or older
+    than STATIC_DATA_MAX_AGE_SECONDS. Safe to call repeatedly - it's a
+    cheap check (just a file timestamp) unless an actual refresh is due."""
+    needs_refresh = False
+
+    if not os.path.exists(lib.DB_PATH):
+        print("No schedule database found - downloading for the first time...")
+        needs_refresh = True
+    else:
+        age_seconds = time.time() - os.path.getmtime(lib.DB_PATH)
+        if age_seconds > STATIC_DATA_MAX_AGE_SECONDS:
+            print(f"Schedule database is {age_seconds / 3600:.1f} hours old - refreshing...")
+            needs_refresh = True
+
+    if not needs_refresh:
+        return
+
+    try:
+        zip_bytes = setup_static_data.download_static_gtfs()
+        setup_static_data.load_into_sqlite(zip_bytes)
+    except Exception as e:
+        print(f"WARNING: failed to refresh static schedule data ({e}).")
+        if not os.path.exists(lib.DB_PATH):
+            print("FATAL: no schedule database is available at all - "
+                  "departures cannot be served until this succeeds.")
+
+
+def static_data_refresher_loop():
+    while True:
+        time.sleep(STATIC_DATA_CHECK_INTERVAL_SECONDS)
+        try:
+            ensure_static_data_ready()
+        except Exception as e:
+            print(f"Static data refresher: check failed ({e}). Will retry next cycle.")
+
+
+def start_static_data_refresher_once():
+    global _static_data_refresher_started
+    if _static_data_refresher_started:
+        return
+    _static_data_refresher_started = True
+    thread = threading.Thread(target=static_data_refresher_loop, daemon=True)
+    thread.start()
+
+
+# Runs at import time (not inside `if __name__ == "__main__"`), since
+# gunicorn imports this module directly in production - this is what
+# actually builds the schedule database on Render, now that it no longer
+# happens during the build step.
+ensure_static_data_ready()
+
 # Started at import time (not inside `if __name__ == "__main__"`), since
 # gunicorn imports this module directly in production and never runs that
 # block below - this line is what actually makes it start on Render.
 if os.path.exists(lib.DB_PATH):
     start_punctuality_poller_once()
+    start_static_data_refresher_once()
 
 
 if __name__ == "__main__":
     if not os.path.exists(lib.DB_PATH):
-        print("ERROR: No database found. Run setup_static_data.py first.")
+        print("ERROR: Could not set up the schedule database. Check the errors above.")
     else:
         print("Starting server. Open http://localhost:5000 in your browser.")
         # use_reloader=False: the reloader re-imports this whole file in a
