@@ -8,7 +8,7 @@ pulled into reusable functions instead of being duplicated.
 import os
 import sqlite3
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
@@ -345,6 +345,21 @@ def get_punctuality_log_connection():
     conn = sqlite3.connect(PUNCTUALITY_LOG_DB_PATH, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=10000")
+
+    # If a table already exists from before the unique constraint was
+    # added, "CREATE TABLE IF NOT EXISTS" below is a no-op and leaves the
+    # old schema in place - which then makes every INSERT...ON CONFLICT
+    # fail, since SQLite requires that exact constraint to actually exist.
+    # This data isn't used by any live feature yet, so rebuilding it fresh
+    # is simpler and safer than a data-preserving migration.
+    existing = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='punctuality_log'"
+    ).fetchone()
+    if existing and "UNIQUE(trip_id, stop_id, service_date)" not in existing[0]:
+        print("Migrating punctuality_log to the new schema "
+              "(old data cleared - not yet used by any live feature).")
+        conn.execute("DROP TABLE punctuality_log")
+
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS punctuality_log (
@@ -357,7 +372,8 @@ def get_punctuality_log_connection():
             stop_id TEXT,
             stop_name TEXT,
             scheduled_time TEXT,
-            delay_seconds INTEGER
+            delay_seconds INTEGER,
+            UNIQUE(trip_id, stop_id, service_date)
         )
         """
     )
@@ -400,9 +416,18 @@ def poll_and_log_punctuality(schedule_conn, api_key):
     logging every stop/delay observation to punctuality_log. Route/stop
     names are looked up from schedule_conn (the regular, refreshable
     schedule database), but the actual log rows are written to the
-    separate, never-wiped punctuality log database. Returns how many rows
-    were logged. Raises requests.exceptions.RequestException on network
-    failure - callers should catch this and keep going."""
+    separate, never-wiped punctuality log database.
+
+    Each (trip, stop, day) combination is stored as ONE row that gets
+    updated in place on every subsequent poll (an upsert), not a new row
+    per poll - a bus tracked every 65 seconds for 20 minutes before it
+    departs was previously logged ~18 times over, even though only the
+    final observed delay actually matters for punctuality history. That
+    alone was responsible for ~270MB of growth in under a day.
+
+    Returns how many rows were logged. Raises
+    requests.exceptions.RequestException on network failure - callers
+    should catch this and keep going."""
     response = requests.get(TRIP_UPDATES_URL, headers={"x-api-key": api_key}, timeout=15)
     response.raise_for_status()
 
@@ -441,6 +466,13 @@ def poll_and_log_punctuality(schedule_conn, api_key):
                         (polled_at, service_date, trip_id, route_id, route_name,
                          stop_id, stop_name, scheduled_time, delay_seconds)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(trip_id, stop_id, service_date) DO UPDATE SET
+                        polled_at = excluded.polled_at,
+                        route_id = excluded.route_id,
+                        route_name = excluded.route_name,
+                        stop_name = excluded.stop_name,
+                        scheduled_time = excluded.scheduled_time,
+                        delay_seconds = excluded.delay_seconds
                     """,
                     (
                         polled_at, service_date, trip_id, route_id, route_name,
@@ -454,6 +486,20 @@ def poll_and_log_punctuality(schedule_conn, api_key):
         log_conn.close()
 
     return rows_logged
+
+
+def prune_old_punctuality_log(retention_days=90):
+    """Deletes punctuality log rows older than retention_days, as a safety
+    net against unbounded growth regardless of the upsert de-duplication
+    above. Returns how many rows were removed."""
+    cutoff = (datetime.now(IE_TZ).date() - timedelta(days=retention_days)).isoformat()
+    conn = get_punctuality_log_connection()
+    try:
+        cur = conn.execute("DELETE FROM punctuality_log WHERE service_date < ?", (cutoff,))
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
 
 
 def get_stats_summary():
