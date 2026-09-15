@@ -1079,6 +1079,7 @@
 
     let soonestLeaveIn = null;
     let soonestLeaveStop = null;
+    let anyAlertCleared = false;
 
     for (const fav of favs) {
       try {
@@ -1105,7 +1106,22 @@
                                 fav.scheduled_time === d.scheduled_time)
           : upcoming[0];
 
-        if (!next) continue;  // that exact trip isn't in the current window (already departed or too far out)
+        if (!next) {
+          // A targeted trip that's no longer in the upcoming window has
+          // genuinely departed (today's schedule only moves forward in
+          // time, so a trip can't legitimately vanish and reappear) - not
+          // just "too far away right now". Clearing it here, not only for
+          // whichever stop happens to be on screen, is what stops a bell
+          // tapped once from silently turning into a permanent daily
+          // alert for every future occurrence of that same scheduled trip.
+          if (fav.route) {
+            fav.route = null;
+            fav.headsign = null;
+            fav.scheduled_time = null;
+            anyAlertCleared = true;
+          }
+          continue;
+        }
 
         const walkMin = walkTimesByStop[fav.stop_id];
         if (walkMin === undefined) continue;
@@ -1131,6 +1147,11 @@
         // One stop failing shouldn't block the others
         console.log('Walk/departure check failed for', fav.stop_id, e);
       }
+    }
+
+    if (anyAlertCleared) {
+      saveFavourites(favs);
+      renderAlertSetBanner(); // in case the cleared alert was for the stop on screen right now
     }
 
     renderFavourites();
