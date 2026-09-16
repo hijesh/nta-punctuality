@@ -271,6 +271,58 @@
   }
   .fav-chip-remove:hover { background: var(--red); color: #ffffff; }
 
+  #activeAlertsPanel {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 10px;
+    padding: 0.75rem 0.9rem;
+    margin: 0.6rem 0;
+  }
+  .active-alerts-header {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin-bottom: 0.5rem;
+  }
+  .active-alert-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.45rem 0;
+    border-bottom: 1px solid var(--panel-edge);
+    cursor: pointer;
+  }
+  .active-alert-row:last-child { border-bottom: none; }
+  .active-alert-row:hover .active-alert-label { color: var(--amber); }
+  .active-alert-label {
+    font-size: 0.82rem;
+    color: var(--text);
+  }
+  .active-alert-meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    display: block;
+    margin-top: 0.1rem;
+  }
+  .active-alert-clear {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--hover-bg);
+    border: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .active-alert-clear:hover { background: var(--red); color: #ffffff; }
+
   .fav-chip .walk-info {
     font-family: 'JetBrains Mono', monospace;
     font-size: 0.72rem;
@@ -789,6 +841,10 @@
 
 <main>
   <div id="favouritesRow"></div>
+  <div id="activeAlertsPanel" class="hidden">
+    <div class="active-alerts-header">Active alerts</div>
+    <div id="activeAlertsList"></div>
+  </div>
   <button id="enableAlertsBtn" class="hidden"></button>
   <div id="leaveNowBanner" class="hidden"></div>
 
@@ -944,6 +1000,8 @@
   });
   const emptyState = document.getElementById('emptyState');
   const favouritesRow = document.getElementById('favouritesRow');
+  const activeAlertsPanel = document.getElementById('activeAlertsPanel');
+  const activeAlertsList = document.getElementById('activeAlertsList');
   const favouriteToggle = document.getElementById('favouriteToggle');
   const liveInfoToggle = document.getElementById('liveInfoToggle');
   const liveInfoPanel = document.getElementById('liveInfoPanel');
@@ -1123,6 +1181,8 @@
   }
 
   function renderFavourites() {
+    renderActiveAlertsPanel();
+
     const allFavs = getFavourites();
     const favs = allFavs.filter(f => f.isFavourite === true);
 
@@ -1178,6 +1238,76 @@
         }
       });
     });
+  }
+
+  // Shows every stop with a currently active bell alert, whether or not
+  // it's also a saved favourite - since an alert-only entry (see
+  // toggleAlertTarget) never appears in the favourites row above, this
+  // is the only place to see "what am I actually tracking right now"
+  // without having to remember and revisit each stop individually.
+  function renderActiveAlertsPanel() {
+    const active = getFavourites().filter(f => f.route);
+
+    if (active.length === 0) {
+      activeAlertsPanel.classList.add('hidden');
+      activeAlertsList.innerHTML = '';
+      return;
+    }
+
+    activeAlertsList.innerHTML = active.map(f => {
+      const destination = f.headsign ? ` &rarr; ${escapeHtml(f.headsign)}` : '';
+      return `<div class="active-alert-row" data-id="${f.stop_id}" data-name="${escapeHtml(f.stop_name)}" data-direction="${escapeHtml(f.direction || '')}">
+                <div>
+                  <span class="active-alert-label">${escapeHtml(f.stop_name)}</span>
+                  <span class="active-alert-meta">Route ${escapeHtml(f.route)}${destination} @ ${escapeHtml(f.scheduled_time)}</span>
+                </div>
+                <button class="active-alert-clear" data-clear-id="${f.stop_id}" title="Turn off this alert" aria-label="Turn off alert for ${escapeHtml(f.stop_name)}">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                </button>
+              </div>`;
+    }).join('');
+
+    activeAlertsList.querySelectorAll('.active-alert-row').forEach(row => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('.active-alert-clear')) return;
+        selectStop(row.dataset.id, row.dataset.name, row.dataset.direction);
+      });
+    });
+
+    activeAlertsList.querySelectorAll('.active-alert-clear').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearAlertForStop(btn.dataset.clearId);
+      });
+    });
+
+    activeAlertsPanel.classList.remove('hidden');
+  }
+
+  // Turns off the alert on any stop, regardless of whether it's the one
+  // currently being viewed - lets the active-alerts panel clear an entry
+  // directly without needing to navigate to that stop's board first.
+  function clearAlertForStop(stopId) {
+    let favs = getFavourites();
+    const fav = favs.find(f => f.stop_id === stopId);
+    if (!fav) return;
+
+    fav.route = null;
+    fav.headsign = null;
+    fav.scheduled_time = null;
+
+    if (!fav.isFavourite) {
+      favs = favs.filter(f => f.stop_id !== stopId);
+    }
+
+    saveFavourites(favs);
+
+    if (stopId === currentStopId) {
+      updateFavouriteToggle();
+      renderAlertSetBanner();
+      renderBoardFromCache();
+    }
+    renderFavourites();
   }
 
   function removeFavourite(stopId) {
