@@ -453,6 +453,16 @@ STATIC_DATA_MAX_AGE_SECONDS = 24 * 60 * 60  # refresh at most once a day
 STATIC_DATA_CHECK_INTERVAL_SECONDS = 6 * 60 * 60  # but check every 6h
 _static_data_refresher_started = False
 
+# Even after de-duplicating to one row per trip/stop/day (see
+# poll_and_log_punctuality), real observed growth is still ~40-90MB/day
+# for a nationwide feed - and the schedule database refresh above needs
+# roughly double its own ~680MB size (old + new copy) momentarily during
+# each rebuild. That leaves limited headroom, so retention here needs to
+# stay short rather than the original 90-day default. Revisit this number
+# if the disk is resized larger, or if logging scope narrows to only
+# favourited/searched stops instead of the full nationwide feed.
+PUNCTUALITY_LOG_RETENTION_DAYS = 7
+
 
 def ensure_static_data_ready():
     """Downloads/rebuilds the schedule database if it's missing, invalid
@@ -489,6 +499,14 @@ def static_data_refresher_loop():
             ensure_static_data_ready()
         except Exception as e:
             print(f"Static data refresher: check failed ({e}). Will retry next cycle.")
+
+        try:
+            pruned = lib.prune_old_punctuality_log(retention_days=PUNCTUALITY_LOG_RETENTION_DAYS)
+            if pruned:
+                print(f"Punctuality log: pruned {pruned} rows older than "
+                      f"{PUNCTUALITY_LOG_RETENTION_DAYS} days.")
+        except Exception as e:
+            print(f"Punctuality log pruning: failed ({e}). Will retry next cycle.")
 
 
 def start_static_data_refresher_once():
