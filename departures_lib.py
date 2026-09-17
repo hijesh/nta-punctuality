@@ -788,6 +788,21 @@ def get_live_board(conn, stop_id: str, api_key: str, lookahead_minutes: int = 90
         delay_seconds = info["delay"] if info else None
         is_cancelled = (trip_id in cancelled_trip_ids) or (info["cancelled"] if info else False)
 
+        # Real vehicles essentially never run dramatically ahead of their
+        # own schedule - a few minutes early is normal, but a live delay
+        # implying 10+ minutes EARLY almost always means the live feed's
+        # trip_id matched the wrong scheduled instance of a very frequent,
+        # near-identical repeating service (seen on Luas, where multiple
+        # departures on the same line can be hard to tell apart by ID
+        # alone) rather than a real early running. Discarding it here
+        # falls back to showing the scheduled time only, rather than a
+        # confidently wrong countdown like "due in 1 min" for a bus
+        # actually scheduled half an hour later. Being late has no such
+        # ceiling - severe genuine delays are common and should still show.
+        IMPLAUSIBLE_EARLY_THRESHOLD_SECONDS = -10 * 60
+        if delay_seconds is not None and delay_seconds < IMPLAUSIBLE_EARLY_THRESHOLD_SECONDS:
+            delay_seconds = None
+
         expected_seconds = scheduled_seconds + (delay_seconds or 0)
         route_display = short_name or long_name or route_id
 
