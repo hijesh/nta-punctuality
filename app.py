@@ -463,6 +463,15 @@ _static_data_refresher_started = False
 # favourited/searched stops instead of the full nationwide feed.
 PUNCTUALITY_LOG_RETENTION_DAYS = 7
 
+# Punctuality history logging is switched OFF. The log database grew to
+# 1.6GB, filled the 3GB disk, and caused "disk I/O error" failures that
+# took the whole app down (the logger's large per-poll writes were also a
+# likely contributor to the repeated out-of-memory kills). Nothing users
+# see depends on it. Setting this back to True re-enables both the poller
+# and the cleanup, but only do that after resizing the disk and shrinking
+# how much gets logged.
+PUNCTUALITY_LOGGING_ENABLED = False
+
 
 def ensure_static_data_ready():
     """Downloads/rebuilds the schedule database if it's missing, invalid
@@ -500,13 +509,14 @@ def static_data_refresher_loop():
         except Exception as e:
             print(f"Static data refresher: check failed ({e}). Will retry next cycle.")
 
-        try:
-            pruned = lib.prune_old_punctuality_log(retention_days=PUNCTUALITY_LOG_RETENTION_DAYS)
-            if pruned:
-                print(f"Punctuality log: pruned {pruned} rows older than "
-                      f"{PUNCTUALITY_LOG_RETENTION_DAYS} days.")
-        except Exception as e:
-            print(f"Punctuality log pruning: failed ({e}). Will retry next cycle.")
+        if PUNCTUALITY_LOGGING_ENABLED:
+            try:
+                pruned = lib.prune_old_punctuality_log(retention_days=PUNCTUALITY_LOG_RETENTION_DAYS)
+                if pruned:
+                    print(f"Punctuality log: pruned {pruned} rows older than "
+                          f"{PUNCTUALITY_LOG_RETENTION_DAYS} days.")
+            except Exception as e:
+                print(f"Punctuality log pruning: failed ({e}). Will retry next cycle.")
 
 
 def start_static_data_refresher_once():
@@ -531,7 +541,8 @@ def start_static_data_refresher_once():
 def initial_startup_loop():
     ensure_static_data_ready()
     if is_schedule_db_valid():
-        start_punctuality_poller_once()
+        if PUNCTUALITY_LOGGING_ENABLED:
+            start_punctuality_poller_once()
         start_static_data_refresher_once()
     else:
         print("Startup: schedule database still isn't ready after the initial "
